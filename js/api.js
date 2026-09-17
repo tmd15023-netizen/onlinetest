@@ -13,7 +13,7 @@ const Api = {
     Storage.clearSession();
   },
   async request(url, options = {}) {
-    headers: { "Content-Type": "application/json; charset=utf-8", ...(options.headers || {}) },
+    const headers = { "Content-Type": "application/json; charset=utf-8", ...(options.headers || {}) };
     if (this.token()) headers.Authorization = `Bearer ${this.token()}`;
     let res;
     try {
