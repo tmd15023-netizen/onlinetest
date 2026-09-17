@@ -244,6 +244,10 @@ async function findExam(id) {
 }
 
 async function writeExam(exam) {
+  if (exam && exam.id && Array.isArray(exam.questions)) {
+    await persistParsedQuestions(exam.id, exam.questions);
+    exam.questionCount = exam.questions.length;
+  }
   if (dbx.mongoReady()) {
     const saved = await dbx.upsertExam(exam);
     const db = loadDb();
@@ -305,60 +309,162 @@ function extFromMime(mime) {
     "image/gif": ".gif",
     "image/webp": ".webp",
     "image/svg+xml": ".svg",
+    "image/bmp": ".bmp",
   };
   return map[String(mime || "").toLowerCase()] || ".png";
 }
 
-function saveDataUriImage(examId, dataUri) {
+function mimeFromName(name) {
+  const ext = path.extname(String(name || "")).toLowerCase();
+  if (ext === ".svg") return "image/svg+xml";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".gif") return "image/gif";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".bmp") return "image/bmp";
+  return "image/png";
+}
+
+function parseDataUri(dataUri) {
+  const raw = String(dataUri || "").trim();
+  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+)([^,]*),(.*)$/s);
+  if (!match) return null;
+  const mime = match[1];
+  const meta = match[2] || "";
+  const payload = match[3] || "";
+  let buf;
+  try {
+    buf = /base64/i.test(meta)
+      ? Buffer.from(payload.replace(/\s/g, ""), "base64")
+      : Buffer.from(decodeURIComponent(payload.replace(/\s/g, "")), "utf8");
+  } catch (err) {
+    return null;
+  }
+  if (!buf.length) return null;
+  return { mime, buf };
+}
+
+function mediaToBuffer(data) {
+  if (!data) return null;
+  if (Buffer.isBuffer(data)) return data;
+  if (data.buffer) return Buffer.from(data.buffer);
+  if (data.type === "Buffer" && Array.isArray(data.data)) return Buffer.from(data.data);
+  try {
+    return Buffer.from(data);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function saveDataUriImage(examId, dataUri) {
   const id = safeExamId(examId);
-  const match = String(dataUri || "").match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
-  if (!id || !match) return "";
-  const buf = Buffer.from(match[2].replace(/\s/g, ""), "base64");
-  if (!buf.length) return "";
-  const name = `${crypto.createHash("sha1").update(buf).digest("hex").slice(0, 20)}${extFromMime(match[1])}`;
-  const dir = path.join(MEDIA_ROOT, id);
-  fs.mkdirSync(dir, { recursive: true });
-  const filepath = path.join(dir, name);
-  if (!fs.existsSync(filepath)) fs.writeFileSync(filepath, buf);
+  const parsed = parseDataUri(dataUri);
+  if (!id || !parsed) return "";
+  const name = `${crypto.createHash("sha1").update(parsed.buf).digest("hex").slice(0, 20)}${extFromMime(parsed.mime)}`;
+  try {
+    const dir = path.join(MEDIA_ROOT, id);
+    fs.mkdirSync(dir, { recursive: true });
+    const filepath = path.join(dir, name);
+    if (!fs.existsSync(filepath)) fs.writeFileSync(filepath, parsed.buf);
+  } catch (err) {
+    console.error("이미지 파일 저장 실패:", err.message);
+  }
+  try {
+    await dbx.saveMedia({ examId: id, name, mime: parsed.mime, data: parsed.buf });
+  } catch (err) {
+    console.error("이미지 DB 저장 실패:", err.message);
+  }
   return `/media/${id}/${name}`;
 }
 
-function persistImageSrc(examId, src) {
+async function persistImageSrc(examId, src) {
   const value = String(src || "").trim();
-  if (value.startsWith("data:image/")) return saveDataUriImage(examId, value);
+  if (value.startsWith("data:image/")) {
+    const url = await saveDataUriImage(examId, value);
+    return url || value;
+  }
   return isSafeImageSrc(value) ? value : "";
 }
 
-function persistInlineImagesInText(examId, text) {
-  return String(text || "").replace(/<<IMG\s+([\s\S]*?)>>/g, (_, src) => {
-    const url = persistImageSrc(examId, src);
-    return url ? `<<IMG ${url}>>` : "";
-  });
+async function persistInlineImagesInText(examId, text) {
+  const src = String(text || "");
+  const re = /<<IMG\s+([\s\S]*?)>>/g;
+  let last = 0;
+  let match;
+  const parts = [];
+  while ((match = re.exec(src))) {
+    parts.push(src.slice(last, match.index));
+    const url = await persistImageSrc(examId, match[1]);
+    parts.push(url ? `<<IMG ${url}>>` : "");
+    last = match.index + match[0].length;
+  }
+  parts.push(src.slice(last));
+  return parts.join("");
 }
 
-function persistQuestionMedia(examId, question) {
-  return {
-    images: sanitizeImages(question && question.images).map((src) => persistImageSrc(examId, src)).filter(Boolean),
-    choiceImages: Array.isArray(question && question.choiceImages)
-      ? question.choiceImages.map((list) => sanitizeImages(list).map((src) => persistImageSrc(examId, src)).filter(Boolean))
-      : [],
-  };
+async function persistQuestionMedia(examId, question) {
+  const images = [];
+  for (const src of sanitizeImages(question && question.images)) {
+    const url = await persistImageSrc(examId, src);
+    if (url) images.push(url);
+  }
+  const choiceImages = [];
+  if (Array.isArray(question && question.choiceImages)) {
+    for (const list of question.choiceImages) {
+      const row = [];
+      for (const src of sanitizeImages(list)) {
+        const url = await persistImageSrc(examId, src);
+        if (url) row.push(url);
+      }
+      choiceImages.push(row);
+    }
+  }
+  return { images, choiceImages };
 }
 
-function persistParsedQuestions(examId, questions) {
+async function persistParsedQuestions(examId, questions) {
   if (!examId || !Array.isArray(questions)) return questions;
-  questions.forEach((question) => {
-    const media = persistQuestionMedia(examId, question);
+  for (const question of questions) {
+    const media = await persistQuestionMedia(examId, question);
     question.images = media.images;
     question.choiceImages = media.choiceImages;
-  });
+  }
   return questions;
 }
 
-function removeExamMedia(examId) {
+async function removeExamMedia(examId) {
   const id = safeExamId(examId);
   if (!id) return;
   fs.rmSync(path.join(MEDIA_ROOT, id), { recursive: true, force: true });
+  await dbx.deleteMediaByExam(id);
+}
+
+async function syncDiskMediaToMongo() {
+  if (!dbx.mongoReady() || !fs.existsSync(MEDIA_ROOT)) return 0;
+  let count = 0;
+  for (const examId of fs.readdirSync(MEDIA_ROOT)) {
+    const id = safeExamId(examId);
+    const dir = path.join(MEDIA_ROOT, examId);
+    if (!id || !fs.statSync(dir).isDirectory()) continue;
+    for (const name of fs.readdirSync(dir)) {
+      const file = path.join(dir, name);
+      if (!fs.statSync(file).isFile()) continue;
+      const safeName = String(name || "").replace(/[^a-zA-Z0-9._-]/g, "");
+      if (!safeName) continue;
+      try {
+        await dbx.saveMedia({
+          examId: id,
+          name: safeName,
+          mime: mimeFromName(safeName),
+          data: fs.readFileSync(file),
+        });
+        count += 1;
+      } catch (err) {
+        console.error(`이미지 올리기 실패 ${id}/${safeName}:`, err.message);
+      }
+    }
+  }
+  if (count) console.log(`문항 이미지 ${count}개를 MongoDB에 올렸습니다.`);
+  return count;
 }
 
 function previewImportedText(text) {
@@ -397,7 +503,7 @@ async function extractTextFromUpload(dataUrl, filename, options = {}) {
     const parsed = await mammoth.convertToHtml({ buffer }, { convertImage: mammoth.images.dataUri });
     let text = htmlToParseText(parsed.value || "", { tablesAsText: Boolean(options.tablesAsText) });
     if (options.persistImagesForExam) {
-      text = persistInlineImagesInText(options.persistImagesForExam, text);
+      text = await persistInlineImagesInText(options.persistImagesForExam, text);
     }
     return text;
   }
@@ -451,9 +557,15 @@ function adminOnly(req, res, next) {
 }
 
 const app = express();
-const boot = dbx.connectMongo().catch((err) => {
-  console.error("MongoDB 연결 실패:", err.message);
-});
+const boot = dbx
+  .connectMongo()
+  .then(async (ok) => {
+    if (ok && !process.env.VERCEL) await syncDiskMediaToMongo();
+    return ok;
+  })
+  .catch((err) => {
+    console.error("MongoDB 연결 실패:", err.message);
+  });
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
     res.setHeader("Cache-Control", "no-cache");
@@ -461,6 +573,26 @@ app.use((req, res, next) => {
   next();
 });
 app.use("/data", (req, res) => res.sendStatus(404));
+app.get("/media/:examId/:name", async (req, res) => {
+  const examId = safeExamId(req.params.examId);
+  const name = String(req.params.name || "").replace(/[^a-zA-Z0-9._-]/g, "");
+  if (!examId || !name) return res.sendStatus(404);
+  const disk = path.join(MEDIA_ROOT, examId, name);
+  if (fs.existsSync(disk)) {
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.sendFile(path.resolve(disk));
+  }
+  try {
+    const file = await dbx.findMedia(examId, name);
+    const buf = mediaToBuffer(file && file.data);
+    if (!buf || !buf.length) return res.sendStatus(404);
+    res.setHeader("Content-Type", file.mime || mimeFromName(name));
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.end(buf);
+  } catch (err) {
+    return res.sendStatus(404);
+  }
+});
 app.use("/media", express.static(MEDIA_ROOT, { maxAge: "1h" }));
 app.use(express.static(__dirname, { maxAge: "7d", index: false }));
 app.get("/", (_req, res) => {
@@ -874,7 +1006,7 @@ app.put("/api/admin/exams/:id", auth, adminOnly, async (req, res) => {
 app.delete("/api/admin/exams/:id", auth, adminOnly, async (req, res) => {
   const exam = await removeExam(req.params.id);
   if (!exam) return res.status(404).json({ error: "시험을 찾을 수 없습니다." });
-  removeExamMedia(req.params.id);
+  await removeExamMedia(req.params.id);
   res.json({ ok: true });
 });
 
@@ -920,14 +1052,14 @@ app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res
   const exam = await findExam(req.params.id);
   if (!exam) return res.status(404).json({ error: "시험을 찾을 수 없습니다." });
   exam.questions = exam.questions || [];
-  items.forEach((item) => {
+  for (const item of items) {
     const q = String(item.q || "").trim();
-    if (!q) return;
+    if (!q) continue;
     const type = item.type === "short" || item.type === "주관식" || !(Array.isArray(item.choices) && item.choices.filter(Boolean).length >= 2)
       ? "short"
       : "mcq";
     if (type === "short") {
-      const media = persistQuestionMedia(exam.id, item);
+      const media = await persistQuestionMedia(exam.id, item);
       exam.questions.push({
         q,
         type: "short",
@@ -938,14 +1070,14 @@ app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res
         images: media.images,
         choiceImages: [],
       });
-      return;
+      continue;
     }
     const choices = Array.isArray(item.choices)
       ? item.choices.map((choice) => String(choice || "").trim()).filter(Boolean)
       : [];
     const answer = Number(item.answer);
-    if (choices.length < 2 || Number.isNaN(answer)) return;
-    const media = persistQuestionMedia(exam.id, item);
+    if (choices.length < 2 || Number.isNaN(answer)) continue;
+    const media = await persistQuestionMedia(exam.id, item);
     exam.questions.push({
       q,
       type: "mcq",
@@ -957,7 +1089,7 @@ app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res
       choiceImages: media.choiceImages,
       choiceLabels: Array.isArray(item.choiceLabels) ? item.choiceLabels.map((label) => String(label || "")) : [],
     });
-  });
+  }
   exam.questionCount = exam.questions.length;
   await writeExam(exam);
   res.json({ ok: true, count: exam.questions.length, questions: exam.questions });
@@ -967,7 +1099,7 @@ app.post("/api/admin/exams/:id/import-pdf", auth, adminOnly, async (req, res) =>
   try {
     const text = await extractTextFromUpload(req.body.pdf, req.body.filename || "questions.pdf");
     const result = parseQuestionsFromText(text);
-    persistParsedQuestions(req.params.id, result.questions);
+    await persistParsedQuestions(req.params.id, result.questions);
     if (!result.questions.length) {
       return res.status(400).json({
         error: "문항을 찾지 못했습니다. 글자가 선택되는 PDF인지, 1. 과 ① ② 형식으로 되어 있는지 확인해 주세요.",
@@ -991,7 +1123,7 @@ app.post("/api/admin/exams/:id/import-docx", auth, adminOnly, async (req, res) =
       persistImagesForExam: req.params.id,
     });
     const result = parseQuestionsFromText(text);
-    persistParsedQuestions(req.params.id, result.questions);
+    await persistParsedQuestions(req.params.id, result.questions);
     if (!result.questions.length) {
       return res.status(400).json({
         error: "문항을 찾지 못했습니다. 1. 문제와 ① ② 또는 (1)(2) 보기 형식인지, 파일이 .docx인지 확인해 주세요.",
@@ -1219,7 +1351,13 @@ app.delete("/api/admin/users/:id", auth, adminOnly, async (req, res) => {
   }
 });
 
-if (require.main === module) {
+if (process.argv.includes("--sync-media")) {
+  boot
+    .then((ok) => {
+      process.exit(ok ? 0 : 1);
+    })
+    .catch(() => process.exit(1));
+} else if (require.main === module) {
   boot.finally(() => {
     app.listen(PORT, () => {
       loadDb();

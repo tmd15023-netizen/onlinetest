@@ -80,6 +80,17 @@ const Attempt = mongoose.model("Attempt", attemptSchema);
 const Settings = mongoose.model("Settings", settingsSchema);
 const Exam = mongoose.model("Exam", examSchema);
 const Notice = mongoose.model("Notice", noticeSchema);
+const mediaSchema = new mongoose.Schema(
+  {
+    examId: { type: String, required: true },
+    name: { type: String, required: true },
+    mime: String,
+    data: Buffer,
+  },
+  { collection: "media" }
+);
+mediaSchema.index({ examId: 1, name: 1 }, { unique: true });
+const Media = mongoose.model("Media", mediaSchema);
 const LiveExam = mongoose.model(
   "LiveExam",
   new mongoose.Schema(
@@ -439,7 +450,31 @@ async function upsertExam(exam) {
 
 async function deleteExam(id) {
   if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  await Media.deleteMany({ examId: id });
   return Exam.findOneAndDelete({ id }).lean();
+}
+
+async function saveMedia(item) {
+  if (!mongoReady()) await ensureMongo();
+  if (!mongoReady() || !item || !item.examId || !item.name || !item.data) return false;
+  await Media.findOneAndUpdate(
+    { examId: item.examId, name: item.name },
+    { $set: { mime: item.mime, data: item.data } },
+    { upsert: true }
+  );
+  return true;
+}
+
+async function findMedia(examId, name) {
+  if (!mongoReady()) await ensureMongo();
+  if (!mongoReady()) return null;
+  return Media.findOne({ examId, name }).lean();
+}
+
+async function deleteMediaByExam(examId) {
+  if (!mongoReady()) await ensureMongo();
+  if (!mongoReady() || !examId) return;
+  await Media.deleteMany({ examId });
 }
 
 async function ensureExams(defaults) {
@@ -520,6 +555,9 @@ module.exports = {
   findExam,
   upsertExam,
   deleteExam,
+  saveMedia,
+  findMedia,
+  deleteMediaByExam,
   ensureExams,
   listNotices,
   findNotice,
