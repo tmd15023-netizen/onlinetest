@@ -523,8 +523,6 @@ app.post("/api/login", async (req, res) => {
         await dbx.createUser(user);
       }
       await dbx.touchLogin(user.id);
-    } else if (process.env.MONGO_URI || process.env.VERCEL) {
-      return res.status(503).json({ error: "회원 DB에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." });
     } else {
       const db = loadDb();
       user = db.users.find((item) => item.name === name);
@@ -764,8 +762,6 @@ app.post("/api/exams/submit", auth, async (req, res) => {
     await dbx.ensureMongo();
     if (dbx.mongoReady()) {
       await dbx.saveAttempt(attempt);
-    } else if (process.env.MONGO_URI || process.env.VERCEL) {
-      return res.status(503).json({ error: "응시 기록을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." });
     }
     backupAttemptJson(attempt);
     await clearLiveExam(req.token);
