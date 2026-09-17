@@ -208,7 +208,7 @@ function formatExamNo(value) {
 }
 
 function nextExamNoFromList(users) {
-  let max = 1000;
+  let max = 0;
   (users || []).forEach((user) => {
     const n = parseInt(formatExamNo(user.examNo), 10);
     if (Number.isFinite(n) && n > max) max = n;
@@ -229,9 +229,26 @@ function publicUser(user, extra = {}) {
 }
 
 async function nextExamNo() {
-  if (!mongoReady()) return "1001";
+  if (!mongoReady()) return "0001";
+  await resequenceExamNos();
   const users = await User.find({}, { examNo: 1 }).lean();
   return nextExamNoFromList(users);
+}
+
+async function resequenceExamNos() {
+  if (!mongoReady()) return;
+  const users = await User.find({}).sort({ createdAt: 1, _id: 1 }).lean();
+  const needs = users.some((user) => {
+    const n = parseInt(formatExamNo(user.examNo), 10);
+    return !n || n >= 1000;
+  });
+  if (!needs) return;
+  for (let i = 0; i < users.length; i += 1) {
+    const examNo = String(i + 1).padStart(4, "0");
+    if (formatExamNo(users[i].examNo) !== examNo) {
+      await User.updateOne({ id: users[i].id }, { $set: { examNo } });
+    }
+  }
 }
 
 async function ensureExamNo(user) {
@@ -351,6 +368,7 @@ async function listAttempts(userId) {
 
 async function listUsers() {
   if (!mongoReady()) return [];
+  await resequenceExamNos();
   const users = await User.find({}).sort({ createdAt: -1 }).lean();
   let byId = {};
   try {

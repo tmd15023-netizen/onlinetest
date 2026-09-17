@@ -90,11 +90,11 @@ function route() {
 }
 
 function examNumber(user) {
-  if (user && user.examNo) return String(user.examNo).padStart(4, "0");
+  if (user && user.examNo) return String(user.examNo).replace(/\D/g, "").padStart(4, "0");
   const src = String((user && (user.id || user.name)) || "1");
   let n = 0;
-  for (let i = 0; i < src.length; i += 1) n = (n * 33 + src.charCodeAt(i)) % 9000;
-  return String(1000 + n).padStart(4, "0");
+  for (let i = 0; i < src.length; i += 1) n = (n * 33 + src.charCodeAt(i)) % 9999;
+  return String(n + 1).padStart(4, "0");
 }
 
 function displayName(user) {
