@@ -22,6 +22,42 @@ const MEDIA_ROOT = process.env.VERCEL ? path.join(DATA_DIR, "media") : path.join
 const sessions = new Map();
 const examSessions = new Map();
 
+async function writeLiveExam(token, live) {
+  examSessions.set(token, live);
+  await dbx.saveLiveExam(token, live);
+}
+
+async function readLiveExam(token) {
+  if (examSessions.has(token)) return examSessions.get(token);
+  const live = await dbx.findLiveExam(token);
+  if (live) examSessions.set(token, live);
+  return live;
+}
+
+async function clearLiveExam(token) {
+  examSessions.delete(token);
+  await dbx.deleteLiveExam(token);
+}
+
+function backupAttemptJson(attempt) {
+  try {
+    const db = loadDb();
+    db.attempts = db.attempts || [];
+    db.attempts = [attempt, ...db.attempts.filter((item) => item.id !== attempt.id)].slice(0, 300);
+    saveDb(db);
+  } catch (err) {
+    console.error("응시 기록 로컬 백업 실패:", err.message);
+  }
+}
+
+function mergeAttempts(mongoList, jsonList) {
+  const byId = new Map();
+  [...(jsonList || []), ...(mongoList || [])].forEach((item) => {
+    if (item && item.id) byId.set(item.id, item);
+  });
+  return [...byId.values()].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+}
+
 function hash(value) {
   return crypto.createHash("sha256").update(String(value), "utf8").digest("hex");
 }
@@ -59,12 +95,8 @@ function loadDb() {
 }
 
 function saveDb(db) {
-  try {
-    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-    fs.writeFileSync(STORE_PATH, JSON.stringify(db, null, 2));
-  } catch (err) {
-    console.error("로컬 DB 저장 실패:", err.message);
-  }
+  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
+  fs.writeFileSync(STORE_PATH, JSON.stringify(db, null, 2));
 }
 
 function sessionSecret() {
@@ -423,7 +455,9 @@ const boot = dbx.connectMongo().catch((err) => {
   console.error("MongoDB 연결 실패:", err.message);
 });
 app.use((req, res, next) => {
-  Promise.resolve(boot).finally(() => next());
+  Promise.resolve(boot)
+    .then(() => dbx.ensureMongo())
+    .finally(() => next());
 });
 app.use(express.json({ limit: "50mb" }));
 app.use("/data", (req, res) => res.sendStatus(404));
@@ -440,12 +474,13 @@ function clientUser(user, role = "user") {
 }
 
 app.post("/api/login", async (req, res) => {
-  const name = String(req.body.name || "").trim();
+  const name = String(req.body.name || "").trim().normalize("NFC");
   const password = String(req.body.password || "");
   const entryCode = String(req.body.entryCode || "").trim();
   if (!name || !password || !entryCode) {
     return res.status(400).json({ error: "이름, 비밀번호, 입장코드를 모두 입력해 주세요." });
   }
+  await dbx.ensureMongo();
   const settings = await getSettings();
   if (name.toLowerCase() === String(settings.adminId).toLowerCase()) {
     return res.status(400).json({ error: "관리자는 로그인 화면의 [관리자] 탭으로 입장해 주세요." });
@@ -478,6 +513,8 @@ app.post("/api/login", async (req, res) => {
         await dbx.createUser(user);
       }
       await dbx.touchLogin(user.id);
+    } else if (process.env.MONGO_URI || process.env.VERCEL) {
+      return res.status(503).json({ error: "회원 DB에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." });
     } else {
       const db = loadDb();
       user = db.users.find((item) => item.name === name);
@@ -633,27 +670,28 @@ app.post("/api/exams/:id/start", auth, async (req, res) => {
     exam.questions && exam.questions.length
       ? exam.questions.map((item, i) => ({ ...item, no: i + 1 }))
       : pickQuestions(exam.seed || 1, exam.questionCount || 10);
-  examSessions.set(req.token, {
+  const live = {
     examId: exam.id,
     title: exam.title,
     minutes: exam.minutes,
     questions: source,
     startedAt: Date.now(),
     endsAt: Date.now() + exam.minutes * 60 * 1000,
-  });
+  };
+  await writeLiveExam(req.token, live);
   res.json({
-    examId: exam.id,
-    title: exam.title,
-    minutes: exam.minutes,
-    startedAt: Date.now(),
-    endsAt: Date.now() + exam.minutes * 60 * 1000,
+    examId: live.examId,
+    title: live.title,
+    minutes: live.minutes,
+    startedAt: live.startedAt,
+    endsAt: live.endsAt,
     category: examGradeLabel(exam.category),
-    questions: source.map((item, index) => clientQuestion(item, index, exam)),
+    questions: live.questions.map((item, index) => clientQuestion(item, index, exam)),
   });
 });
 
-app.get("/api/exams/live", auth, (req, res) => {
-  const live = examSessions.get(req.token);
+app.get("/api/exams/live", auth, async (req, res) => {
+  const live = await readLiveExam(req.token);
   if (!live) return res.status(404).json({ error: "진행 중인 시험이 없습니다." });
   res.json({
     examId: live.examId,
@@ -666,7 +704,18 @@ app.get("/api/exams/live", auth, (req, res) => {
 });
 
 app.post("/api/exams/submit", auth, async (req, res) => {
-  const live = examSessions.get(req.token);
+  let live = await readLiveExam(req.token);
+  if (!live && req.body.examId) {
+    const exam = await findExam(req.body.examId);
+    if (exam && Array.isArray(exam.questions) && exam.questions.length) {
+      live = {
+        examId: exam.id,
+        title: exam.title,
+        minutes: exam.minutes,
+        questions: exam.questions.map((item, i) => ({ ...item, no: i + 1 })),
+      };
+    }
+  }
   if (!live) return res.status(400).json({ error: "진행 중인 시험이 없습니다." });
   const answers = req.body.answers || {};
   let correct = 0;
@@ -702,15 +751,14 @@ app.post("/api/exams/submit", auth, async (req, res) => {
     review,
   };
   try {
+    await dbx.ensureMongo();
     if (dbx.mongoReady()) {
       await dbx.saveAttempt(attempt);
-    } else {
-      const db = loadDb();
-      db.attempts.unshift(attempt);
-      db.attempts = db.attempts.slice(0, 300);
-      saveDb(db);
+    } else if (process.env.MONGO_URI || process.env.VERCEL) {
+      return res.status(503).json({ error: "응시 기록을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." });
     }
-    examSessions.delete(req.token);
+    backupAttemptJson(attempt);
+    await clearLiveExam(req.token);
     res.json(attempt);
   } catch (err) {
     res.status(500).json({ error: err.message || "응시 결과를 저장하지 못했습니다." });
@@ -719,12 +767,10 @@ app.post("/api/exams/submit", auth, async (req, res) => {
 
 app.get("/api/me/attempts", auth, async (req, res) => {
   try {
-    if (dbx.mongoReady()) {
-      const list = await dbx.listAttempts(req.session.userId);
-      return res.json(list);
-    }
-    const db = loadDb();
-    res.json(db.attempts.filter((item) => item.userId === req.session.userId));
+    await dbx.ensureMongo();
+    const mongoList = dbx.mongoReady() ? await dbx.listAttempts(req.session.userId) : [];
+    const jsonList = (loadDb().attempts || []).filter((item) => item.userId === req.session.userId);
+    res.json(mergeAttempts(mongoList, jsonList));
   } catch (err) {
     res.status(500).json({ error: err.message || "응시 기록을 불러오지 못했습니다." });
   }
@@ -1019,7 +1065,10 @@ app.delete("/api/admin/exams/:id/questions/:index", auth, adminOnly, async (req,
 
 app.get("/api/admin/attempts", auth, adminOnly, async (req, res) => {
   try {
-    const list = dbx.mongoReady() ? await dbx.listAttempts() : loadDb().attempts;
+    await dbx.ensureMongo();
+    const mongoList = dbx.mongoReady() ? await dbx.listAttempts() : [];
+    const jsonList = loadDb().attempts || [];
+    const list = mergeAttempts(mongoList, jsonList);
     res.json(
       list.map((item) => ({
         id: item.id,
@@ -1039,18 +1088,23 @@ app.get("/api/admin/attempts", auth, adminOnly, async (req, res) => {
 
 app.delete("/api/admin/attempts/:id", auth, adminOnly, async (req, res) => {
   try {
+    let removed = false;
     if (dbx.mongoReady()) {
       const attempt = await dbx.deleteAttempt(req.params.id);
-      if (!attempt) return res.status(404).json({ error: "응시 기록을 찾을 수 없습니다." });
-      return res.json({ ok: true });
+      if (attempt) removed = true;
     }
-    const db = loadDb();
-    const before = (db.attempts || []).length;
-    db.attempts = (db.attempts || []).filter((item) => item.id !== req.params.id);
-    if (db.attempts.length === before) {
-      return res.status(404).json({ error: "응시 기록을 찾을 수 없습니다." });
+    try {
+      const db = loadDb();
+      const before = (db.attempts || []).length;
+      db.attempts = (db.attempts || []).filter((item) => item.id !== req.params.id);
+      if (db.attempts.length !== before) {
+        saveDb(db);
+        removed = true;
+      }
+    } catch (err) {
+      console.error("응시 기록 로컬 삭제 실패:", err.message);
     }
-    saveDb(db);
+    if (!removed) return res.status(404).json({ error: "응시 기록을 찾을 수 없습니다." });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message || "응시 기록을 삭제하지 못했습니다." });

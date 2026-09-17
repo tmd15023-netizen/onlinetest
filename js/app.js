@@ -23,6 +23,7 @@ const CIRCLES = ["①", "②", "③", "④", "⑤"];
 
 let state = {
   category: "all",
+  noteExam: "all",
   sidebarOpen: false,
   modalExam: null,
   noticeId: null,
@@ -563,23 +564,44 @@ function notesWithExplain(notes) {
 
 function renderNotes() {
   const notes = notesWithExplain(Storage.getWrong());
+  const exams = [];
+  notes.forEach((item) => {
+    const title = String(item.examTitle || "기타").trim() || "기타";
+    if (!exams.includes(title)) exams.push(title);
+  });
+  if (state.noteExam !== "all" && !exams.includes(state.noteExam)) state.noteExam = "all";
+  const visible = notes.filter((item) => state.noteExam === "all" || String(item.examTitle || "기타").trim() === state.noteExam);
+  const chip = (id, label, count, dotted) => `
+    <button class="chip ${state.noteExam === id ? "active" : ""}" type="button" data-note-exam="${encodeURIComponent(id)}" title="${escapeHtml(label)}">
+      ${dotted ? `<span class="dot"></span>` : ""}${escapeHtml(label)} (${count})
+    </button>
+  `;
   document.getElementById("app").innerHTML = layout(
     "notes",
     `
       <section class="page-head">
-        <h1>오답 노트</h1>
+        <div class="page-head-row">
+          <h1>오답 노트</h1>
+          ${
+            notes.length
+              ? `<div class="filters note-filters">${chip("all", "전체", notes.length, false)}${exams
+                  .map((title) => chip(title, title, notes.filter((item) => String(item.examTitle || "기타").trim() === title).length, true))
+                  .join("")}</div>`
+              : ""
+          }
+        </div>
         <p>틀린 문항을 다시 보며 약점을 보완하세요.</p>
       </section>
       <section class="card page-card">
         ${
-          notes.length
-            ? notes
+          visible.length
+            ? visible
                 .map(
                   (item) => `
             <div class="review-item">
               <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
                 <span class="ox ng">오답</span>
-                <span class="notice-date">${escapeHtml(item.examTitle)} · ${item.no}번</span>
+                <span class="notice-date">${state.noteExam === "all" ? `${escapeHtml(item.examTitle)} · ` : ""}${item.no}번</span>
                 <button class="link-more" data-del="${item.id}" style="margin-left:auto">삭제</button>
               </div>
               <h3 style="font-size:15px">${escapeHtml(item.q)}</h3>
@@ -596,6 +618,12 @@ function renderNotes() {
     `
   );
   bindChrome();
+  document.querySelectorAll("[data-note-exam]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.noteExam = decodeURIComponent(btn.dataset.noteExam || "all");
+      renderNotes();
+    });
+  });
   document.querySelectorAll("[data-del]").forEach((btn) => {
     btn.addEventListener("click", () => {
       Storage.removeWrong(btn.dataset.del);

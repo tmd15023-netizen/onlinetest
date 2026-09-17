@@ -80,6 +80,22 @@ const Attempt = mongoose.model("Attempt", attemptSchema);
 const Settings = mongoose.model("Settings", settingsSchema);
 const Exam = mongoose.model("Exam", examSchema);
 const Notice = mongoose.model("Notice", noticeSchema);
+const LiveExam = mongoose.model(
+  "LiveExam",
+  new mongoose.Schema(
+    {
+      token: { type: String, required: true, unique: true },
+      examId: String,
+      title: String,
+      minutes: Number,
+      questions: { type: Array, default: [] },
+      startedAt: Number,
+      endsAt: Number,
+      savedAt: { type: Date, default: Date.now, expires: 28800 },
+    },
+    { collection: "live_exams" }
+  )
+);
 
 let connected = false;
 
@@ -98,18 +114,27 @@ async function migrateFromJson() {
   } catch (err) {
     return;
   }
-  if (Array.isArray(raw.users) && raw.users.length && (await User.countDocuments()) === 0) {
-    await User.insertMany(
-      raw.users.map((item) => ({
+  if (Array.isArray(raw.users) && raw.users.length) {
+    let added = 0;
+    for (const item of raw.users) {
+      const name = String(item.name || "").trim();
+      if (!name || name.includes("?")) continue;
+      const exists = await User.findOne({
+        $or: [{ id: item.id }, { name }],
+      }).lean();
+      if (exists) continue;
+      await User.create({
         id: item.id,
-        name: item.name,
+        name,
         password: item.password,
+        examNo: item.examNo || "",
         createdAt: item.createdAt || new Date().toISOString(),
-        lastLoginAt: "",
-        disabled: false,
-      }))
-    );
-    console.log(`회원 ${raw.users.length}명을 MongoDB로 옮겼습니다.`);
+        lastLoginAt: item.lastLoginAt || "",
+        disabled: Boolean(item.disabled),
+      });
+      added += 1;
+    }
+    if (added) console.log(`회원 ${added}명을 MongoDB로 옮겼습니다.`);
   }
   if (Array.isArray(raw.attempts) && raw.attempts.length && (await Attempt.countDocuments()) === 0) {
     await Attempt.insertMany(raw.attempts);
@@ -146,14 +171,26 @@ async function connectMongo() {
     if (String(uri).includes("mongodb+srv://")) {
       dns.setServers(["8.8.8.8", "1.1.1.1", "168.126.63.1"]);
     }
+    if (mongoose.connection.readyState === 1) {
+      connected = true;
+      return true;
+    }
     await mongoose.connect(uri, { serverSelectionTimeoutMS: 12000, family: 4 });
     connected = true;
     await migrateFromJson();
     console.log(`MongoDB 연결됨 ${safeUri(uri)}`);
+    return true;
   } catch (err) {
     connected = false;
     console.error("MongoDB 연결 실패:", err.message);
+    return false;
   }
+}
+
+async function ensureMongo() {
+  if (mongoReady()) return true;
+  if (!process.env.MONGO_URI && !process.env.VERCEL) return false;
+  return connectMongo();
 }
 
 function formatExamNo(value) {
@@ -204,8 +241,10 @@ async function ensureExamNo(user) {
 }
 
 async function findUserByName(name) {
-  if (mongoReady()) return User.findOne({ name }).lean();
-  return null;
+  if (!mongoReady()) return null;
+  const value = String(name || "").trim().normalize("NFC");
+  if (!value) return null;
+  return User.findOne({ name: value }).lean();
 }
 
 async function createUser(user) {
@@ -219,9 +258,72 @@ async function touchLogin(userId) {
   await User.updateOne({ id: userId }, { $set: { lastLoginAt: new Date().toISOString() } });
 }
 
+function compactAttempt(attempt) {
+  return {
+    ...attempt,
+    review: (attempt.review || []).map((row) => ({
+      no: row.no,
+      q: row.q,
+      type: row.type,
+      choices: row.choices,
+      answer: row.answer,
+      selected: row.selected,
+      ok: row.ok,
+      explain: row.explain,
+    })),
+  };
+}
+
 async function saveAttempt(attempt) {
   if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
-  await Attempt.create(attempt);
+  try {
+    await Attempt.create(attempt);
+  } catch (err) {
+    await Attempt.create(compactAttempt(attempt));
+  }
+}
+
+async function saveLiveExam(token, live) {
+  if (!mongoReady()) return;
+  try {
+    await LiveExam.findOneAndUpdate(
+      { token },
+      {
+        $set: {
+          token,
+          examId: live.examId,
+          title: live.title,
+          minutes: live.minutes,
+          questions: live.questions,
+          startedAt: live.startedAt,
+          endsAt: live.endsAt,
+          savedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+  } catch (err) {
+    console.error("진행 중 시험 저장 실패:", err.message);
+  }
+}
+
+async function findLiveExam(token) {
+  if (!mongoReady()) return null;
+  const doc = await LiveExam.findOne({ token }).lean();
+  if (!doc) return null;
+  return {
+    examId: doc.examId,
+    title: doc.title,
+    minutes: doc.minutes,
+    questions: doc.questions || [],
+    startedAt: doc.startedAt,
+    endsAt: doc.endsAt,
+  };
+}
+
+async function deleteLiveExam(token) {
+  if (!mongoReady()) return;
+  await LiveExam.deleteOne({ token });
 }
 
 async function deleteAttempt(id) {
@@ -238,8 +340,13 @@ async function listAttempts(userId) {
 async function listUsers() {
   if (!mongoReady()) return [];
   const users = await User.find({}).sort({ createdAt: -1 }).lean();
-  const counts = await Attempt.aggregate([{ $group: { _id: "$userId", count: { $sum: 1 }, last: { $max: "$at" } } }]);
-  const byId = Object.fromEntries(counts.map((item) => [item._id, item]));
+  let byId = {};
+  try {
+    const counts = await Attempt.aggregate([{ $group: { _id: "$userId", count: { $sum: 1 }, last: { $max: "$at" } } }]);
+    byId = Object.fromEntries(counts.map((item) => [item._id, item]));
+  } catch (err) {
+    console.error("응시 횟수를 집계하지 못했습니다:", err.message);
+  }
   return users.map((user) =>
     publicUser(user, {
       attemptCount: (byId[user.id] && byId[user.id].count) || 0,
@@ -355,6 +462,7 @@ async function ensureNotices(defaults) {
 
 module.exports = {
   connectMongo,
+  ensureMongo,
   mongoReady,
   User,
   Attempt,
@@ -370,6 +478,9 @@ module.exports = {
   createUser,
   touchLogin,
   saveAttempt,
+  saveLiveExam,
+  findLiveExam,
+  deleteLiveExam,
   deleteAttempt,
   listAttempts,
   listUsers,

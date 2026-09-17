@@ -272,6 +272,23 @@ button {
   margin: 10px 0 22px;
 }
 
+.page-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px 14px;
+  flex-wrap: wrap;
+}
+
+.page-head-row h1 {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.note-filters.filters {
+  margin: 0;
+  align-items: center;
+}
+
 .page-head h1 {
   font-size: 22px;
   font-weight: 800;
@@ -672,6 +689,11 @@ button {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.member-name {
+  color: var(--text);
+  font-weight: 800;
 }
 
 .attempt-score {

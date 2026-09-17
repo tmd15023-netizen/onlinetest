@@ -33,7 +33,7 @@ const ExamEngine = {
   },
 
   async submit(session) {
-    const attempt = await Api.submitExam(session.answers);
+    const attempt = await Api.submitExam(session.answers, session.examId);
     Storage.addAttempt(attempt);
     const wrong = (attempt.review || [])
       .filter((item) => !item.ok)

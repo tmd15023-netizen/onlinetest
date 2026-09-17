@@ -13,7 +13,7 @@ const Api = {
     Storage.clearSession();
   },
   async request(url, options = {}) {
-    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    headers: { "Content-Type": "application/json; charset=utf-8", ...(options.headers || {}) },
     if (this.token()) headers.Authorization = `Bearer ${this.token()}`;
     let res;
     try {
@@ -48,8 +48,11 @@ const Api = {
   liveExam() {
     return this.request("/api/exams/live");
   },
-  submitExam(answers) {
-    return this.request("/api/exams/submit", { method: "POST", body: JSON.stringify({ answers }) });
+  submitExam(answers, examId) {
+    return this.request("/api/exams/submit", {
+      method: "POST",
+      body: JSON.stringify({ answers, examId: examId || "" }),
+    });
   },
   myAttempts() {
     return this.request("/api/me/attempts");

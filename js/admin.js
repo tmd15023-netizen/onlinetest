@@ -1140,7 +1140,7 @@ async function renderAdminUsers() {
                   (item) => `
             <div class="list-row">
               <div>
-                <h3>${item.examNo ? `<span class="exam-no">${escapeHtml(item.examNo)}</span> ` : ""}${escapeHtml(item.name)} ${item.disabled ? '<span class="badge">정지</span>' : ""}</h3>
+                <h3>${item.examNo ? `<span class="exam-no">${escapeHtml(item.examNo)}</span> ` : ""}<span class="member-name">${escapeHtml(item.name || "이름 없음")}</span> ${item.disabled ? '<span class="badge">정지</span>' : ""}</h3>
                 <p>가입 ${formatDate(item.createdAt)} · 최근 로그인 ${item.lastLoginAt ? formatDate(item.lastLoginAt) : "없음"} · 응시 ${item.attemptCount || 0}회</p>
               </div>
               <div class="aside member-actions">
