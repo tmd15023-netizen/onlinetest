@@ -251,7 +251,10 @@ async function findUserByName(name) {
   if (!mongoReady()) return null;
   const value = String(name || "").trim().normalize("NFC");
   if (!value) return null;
-  return User.findOne({ name: value }).lean();
+  const exact = await User.findOne({ name: value }).lean();
+  if (exact) return exact;
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return User.findOne({ name: { $regex: `^${escaped}$`, $options: "i" } }).lean();
 }
 
 async function createUser(user) {

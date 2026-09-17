@@ -492,7 +492,7 @@ app.post("/api/login", async (req, res) => {
   }
   await dbx.ensureMongo();
   const settings = await getSettings();
-  if (name.toLowerCase() === String(settings.adminId).toLowerCase()) {
+  if (isAdminId(name, settings)) {
     return res.status(400).json({ error: "관리자는 로그인 화면의 [관리자] 탭으로 입장해 주세요." });
   }
   if (entryCode !== settings.entryCode) {
@@ -502,15 +502,7 @@ app.post("/api/login", async (req, res) => {
     let user;
     if (dbx.mongoReady()) {
       user = await dbx.findUserByName(name);
-      if (user) {
-        if (user.disabled) {
-          return res.status(403).json({ error: "정지된 회원입니다. 관리자에게 문의해 주세요." });
-        }
-        if (user.password !== hash(password)) {
-          return res.status(401).json({ error: "비밀번호가 올바르지 않습니다." });
-        }
-        await dbx.ensureExamNo(user);
-      } else {
+      if (!user) {
         user = {
           id: uid("u"),
           name,
@@ -520,12 +512,28 @@ app.post("/api/login", async (req, res) => {
           lastLoginAt: new Date().toISOString(),
           disabled: false,
         };
-        await dbx.createUser(user);
+        try {
+          await dbx.createUser(user);
+        } catch (err) {
+          if (err && err.code === 11000) {
+            user = await dbx.findUserByName(name);
+            if (!user) throw err;
+          } else {
+            throw err;
+          }
+        }
       }
+      if (user.disabled) {
+        return res.status(403).json({ error: "정지된 회원입니다. 관리자에게 문의해 주세요." });
+      }
+      if (user.password !== hash(password)) {
+        return res.status(401).json({ error: "비밀번호가 올바르지 않습니다." });
+      }
+      await dbx.ensureExamNo(user);
       await dbx.touchLogin(user.id);
     } else {
       const db = loadDb();
-      user = db.users.find((item) => item.name === name);
+      user = db.users.find((item) => String(item.name || "").trim().toLowerCase() === name.toLowerCase());
       if (user) {
         if (user.disabled) {
           return res.status(403).json({ error: "정지된 회원입니다. 관리자에게 문의해 주세요." });
