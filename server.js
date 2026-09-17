@@ -468,8 +468,9 @@ app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 app.use("/api", (req, res, next) => {
+  if (dbx.mongoReady()) return next();
   Promise.resolve(boot)
-    .then(() => dbx.ensureMongo())
+    .catch(() => {})
     .finally(() => next());
 });
 app.use("/api", express.json({ limit: "50mb" }));

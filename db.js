@@ -167,24 +167,26 @@ async function connectMongo() {
     return false;
   }
   try {
+    if (mongoose.connection.readyState === 1) {
+      connected = true;
+      return true;
+    }
     try {
       dns.setDefaultResultOrder("ipv4first");
     } catch (err) {
       /* Node 버전에 따라 없을 수 있음 */
     }
-    if (String(uri).includes("mongodb+srv://")) {
+    if (!process.env.VERCEL && String(uri).includes("mongodb+srv://")) {
       dns.setServers(["8.8.8.8", "1.1.1.1", "168.126.63.1"]);
     }
-    if (mongoose.connection.readyState === 1) {
-      connected = true;
-      return true;
-    }
-    await mongoose.connect(uri, {
-      serverSelectionTimeoutMS: process.env.VERCEL ? 4000 : 8000,
-      family: 4,
-    });
+    const options = {
+      serverSelectionTimeoutMS: process.env.VERCEL ? 5000 : 8000,
+      maxPoolSize: process.env.VERCEL ? 1 : 10,
+    };
+    if (!process.env.VERCEL) options.family = 4;
+    await mongoose.connect(uri, options);
     connected = true;
-    await migrateFromJson();
+    if (!process.env.VERCEL) await migrateFromJson();
     console.log(`MongoDB 연결됨 ${safeUri(uri)}`);
     return true;
   } catch (err) {

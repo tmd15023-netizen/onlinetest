@@ -1248,12 +1248,11 @@ function render() {
   }
 
   loadExams()
-    .then(() => Api.notices().catch(() => NOTICES))
-    .then((notices) => {
+    .then(() =>
+      Promise.all([Api.notices().catch(() => NOTICES), Api.myAttempts().catch(() => [])])
+    )
+    .then(([notices, attempts]) => {
       window.LIVE_NOTICES = notices;
-      return Api.myAttempts();
-    })
-    .then((attempts) => {
       window.MY_ATTEMPTS = attempts;
       state.noticeId = params.get("id");
       if (path === "/notices") renderNotices();
