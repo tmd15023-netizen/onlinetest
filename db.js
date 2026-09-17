@@ -1,6 +1,7 @@
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
+const dns = require("dns");
 const mongoose = require("mongoose");
 
 const STORE_PATH = path.join(__dirname, "data", "store.json");
@@ -137,6 +138,14 @@ async function migrateFromJson() {
 async function connectMongo() {
   const uri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/oncodelab_exam";
   try {
+    try {
+      dns.setDefaultResultOrder("ipv4first");
+    } catch (err) {
+      /* Node 버전에 따라 없을 수 있음 */
+    }
+    if (String(uri).includes("mongodb+srv://")) {
+      dns.setServers(["8.8.8.8", "1.1.1.1", "168.126.63.1"]);
+    }
     await mongoose.connect(uri, { serverSelectionTimeoutMS: 12000, family: 4 });
     connected = true;
     await migrateFromJson();
