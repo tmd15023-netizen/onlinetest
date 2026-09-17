@@ -19,11 +19,11 @@ const Api = {
     try {
       res = await fetch(url, { ...options, headers });
     } catch (err) {
-      throw new Error("서버에 연결되지 않았습니다. 주소창을 http://127.0.0.1:8765 로 열어 주세요.");
+      throw new Error("서버에 연결되지 않았습니다. 잠시 후 다시 시도해 주세요.");
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || "요청에 실패했습니다. 주소창이 http://127.0.0.1:8765 인지 확인해 주세요.");
+      throw new Error(data.error || "요청에 실패했습니다. 잠시 후 다시 시도해 주세요.");
     }
     return data;
   },

@@ -137,7 +137,7 @@ async function migrateFromJson() {
 async function connectMongo() {
   const uri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/oncodelab_exam";
   try {
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 12000 });
+    await mongoose.connect(uri, { serverSelectionTimeoutMS: 12000, family: 4 });
     connected = true;
     await migrateFromJson();
     console.log(`MongoDB 연결됨 ${safeUri(uri)}`);

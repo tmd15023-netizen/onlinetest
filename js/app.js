@@ -49,8 +49,17 @@ function safeImageSrc(src) {
     value.startsWith("/media/") ||
     value.startsWith("https://") ||
     value.startsWith("http://127.0.0.1") ||
-    value.startsWith("http://localhost")
+    value.startsWith("http://localhost") ||
+    (typeof location !== "undefined" && value.startsWith(location.origin))
   ) {
+    if (value.startsWith("http://127.0.0.1") || value.startsWith("http://localhost")) {
+      try {
+        const parsed = new URL(value);
+        if (parsed.pathname.startsWith("/media/")) return parsed.pathname.replace(/"/g, "");
+      } catch (err) {
+        /* keep original */
+      }
+    }
     return value.replace(/"/g, "");
   }
   return "";
@@ -108,9 +117,13 @@ function formatDate(iso) {
   return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}.`;
 }
 
+function isLoginHostOk() {
+  return location.protocol === "https:" || location.protocol === "http:";
+}
+
 function renderAuth(mode) {
   const admin = mode === "admin";
-  const hostOk = location.protocol.startsWith("http") && location.port === "8765";
+  const hostOk = isLoginHostOk();
   document.getElementById("app").innerHTML = `
     <div class="auth">
       <form class="auth-card" id="login-form" autocomplete="off">
@@ -137,7 +150,7 @@ function renderAuth(mode) {
           <div class="field"><label for="entryCode">입장코드</label><input id="entryCode" name="login_entry_code" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required /></div>
         `
         }
-        <p class="form-banner err" id="auth-error" ${hostOk ? "hidden" : ""}>${hostOk ? "" : "주소창을 http://127.0.0.1:8765 로 열어 주세요. 파일이나 다른 포트에서는 로그인이 되지 않습니다."}</p>
+        <p class="form-banner err" id="auth-error" ${hostOk ? "hidden" : ""}>${hostOk ? "" : "파일로 열면 로그인이 되지 않습니다. 웹 주소로 접속해 주세요."}</p>
         <button class="btn btn-primary" type="submit">${admin ? "관리자 입장" : "입장하기"}</button>
       </form>
     </div>

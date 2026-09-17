@@ -16,8 +16,9 @@ const { isShortQuestion, gradeQuestion } = require("./js/question.js");
 const dbx = require("./db.js");
 
 const PORT = process.env.PORT || 8765;
-const STORE_PATH = path.join(__dirname, "data", "store.json");
-const MEDIA_ROOT = path.join(__dirname, "data", "media");
+const DATA_DIR = process.env.VERCEL ? path.join("/tmp", "oncodelab") : path.join(__dirname, "data");
+const STORE_PATH = path.join(DATA_DIR, "store.json");
+const MEDIA_ROOT = process.env.VERCEL ? path.join(DATA_DIR, "media") : path.join(__dirname, "data", "media");
 const sessions = new Map();
 const examSessions = new Map();
 
@@ -58,8 +59,45 @@ function loadDb() {
 }
 
 function saveDb(db) {
-  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(db, null, 2));
+  try {
+    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
+    fs.writeFileSync(STORE_PATH, JSON.stringify(db, null, 2));
+  } catch (err) {
+    console.error("로컬 DB 저장 실패:", err.message);
+  }
+}
+
+function sessionSecret() {
+  return process.env.SESSION_SECRET || process.env.MONGO_URI || "oncodelab-exam-session";
+}
+
+function signSession(session) {
+  const payload = Buffer.from(JSON.stringify(session), "utf8").toString("base64url");
+  const sig = crypto.createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function readSession(token) {
+  const cached = sessions.get(token);
+  if (cached) return cached;
+  const parts = String(token || "").split(".");
+  if (parts.length !== 2) return null;
+  const [payload, sig] = parts;
+  const expected = crypto.createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
+  const left = Buffer.from(String(sig));
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch (err) {
+    return null;
+  }
+}
+
+function issueSession(session) {
+  const token = signSession(session);
+  sessions.set(token, session);
+  return token;
 }
 
 function defaultSettings() {
@@ -363,8 +401,8 @@ function publicExam(exam) {
 }
 
 function auth(req, res, next) {
-  const token = String(req.headers.authorization || "").replace("Bearer ", "");
-  const session = sessions.get(token);
+  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const session = readSession(token);
   if (!session) {
     return res.status(401).json({ error: "로그인이 필요합니다." });
   }
@@ -381,6 +419,12 @@ function adminOnly(req, res, next) {
 }
 
 const app = express();
+const boot = dbx.connectMongo().catch((err) => {
+  console.error("MongoDB 연결 실패:", err.message);
+});
+app.use((req, res, next) => {
+  Promise.resolve(boot).finally(() => next());
+});
 app.use(express.json({ limit: "50mb" }));
 app.use("/data", (req, res) => res.sendStatus(404));
 app.use("/media", express.static(MEDIA_ROOT));
@@ -463,8 +507,7 @@ app.post("/api/login", async (req, res) => {
         saveDb(db);
       }
     }
-    const token = crypto.randomBytes(24).toString("hex");
-    sessions.set(token, { role: "user", userId: user.id, name: user.name, examNo: user.examNo });
+    const token = issueSession({ role: "user", userId: user.id, name: user.name, examNo: user.examNo });
     res.json({ token, user: clientUser(user) });
   } catch (err) {
     res.status(500).json({ error: err.message || "회원 정보를 저장하지 못했습니다." });
@@ -504,8 +547,7 @@ app.post("/api/admin/login", async (req, res) => {
   if (!isAdminId(id, settings) || !isAdminPassword(password, settings)) {
     return res.status(401).json({ error: "관리자 아이디 또는 비밀번호가 올바르지 않습니다." });
   }
-  const token = crypto.randomBytes(24).toString("hex");
-  sessions.set(token, { role: "admin", userId: "admin", name: "관리자" });
+  const token = issueSession({ role: "admin", userId: "admin", name: "관리자" });
   res.json({ token, user: { id: "admin", name: "관리자", role: "admin" } });
 });
 
@@ -1104,10 +1146,14 @@ app.delete("/api/admin/users/:id", auth, adminOnly, async (req, res) => {
   }
 });
 
-dbx.connectMongo().finally(() => {
-  app.listen(PORT, () => {
-    loadDb();
-    console.log(`온코드랩 시험장 http://127.0.0.1:${PORT}`);
-    console.log(dbx.mongoReady() ? "회원 DB: MongoDB" : "회원 DB: JSON (MongoDB 미연결)");
+if (require.main === module) {
+  boot.finally(() => {
+    app.listen(PORT, () => {
+      loadDb();
+      console.log(`온코드랩 시험장 http://127.0.0.1:${PORT}`);
+      console.log(dbx.mongoReady() ? "회원 DB: MongoDB" : "회원 DB: JSON (MongoDB 미연결)");
+    });
   });
-});
+}
+
+module.exports = app;
