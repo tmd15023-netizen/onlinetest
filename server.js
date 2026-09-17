@@ -455,21 +455,24 @@ const boot = dbx.connectMongo().catch((err) => {
   console.error("MongoDB 연결 실패:", err.message);
 });
 app.use((req, res, next) => {
+  if (req.path === "/" || req.path.endsWith(".html")) {
+    res.setHeader("Cache-Control", "no-cache");
+  }
+  next();
+});
+app.use("/data", (req, res) => res.sendStatus(404));
+app.use("/media", express.static(MEDIA_ROOT, { maxAge: "1h" }));
+app.use(express.static(__dirname, { maxAge: "7d", index: false }));
+app.get("/", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+app.use("/api", (req, res, next) => {
   Promise.resolve(boot)
     .then(() => dbx.ensureMongo())
     .finally(() => next());
 });
-app.use((req, res, next) => {
-  if (req.path === "/" || /\.(?:html|js|css)$/i.test(req.path)) {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.setHeader("Pragma", "no-cache");
-  }
-  next();
-});
-app.use(express.json({ limit: "50mb" }));
-app.use("/data", (req, res) => res.sendStatus(404));
-app.use("/media", express.static(MEDIA_ROOT));
-app.use(express.static(__dirname));
+app.use("/api", express.json({ limit: "50mb" }));
 
 function clientUser(user, role = "user") {
   return {

@@ -161,7 +161,11 @@ async function migrateFromJson() {
 }
 
 async function connectMongo() {
-  const uri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/oncodelab_exam";
+  const uri = process.env.MONGO_URI || (process.env.VERCEL ? "" : "mongodb://127.0.0.1:27017/oncodelab_exam");
+  if (!uri) {
+    connected = false;
+    return false;
+  }
   try {
     try {
       dns.setDefaultResultOrder("ipv4first");
@@ -175,7 +179,10 @@ async function connectMongo() {
       connected = true;
       return true;
     }
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 12000, family: 4 });
+    await mongoose.connect(uri, {
+      serverSelectionTimeoutMS: process.env.VERCEL ? 4000 : 8000,
+      family: 4,
+    });
     connected = true;
     await migrateFromJson();
     console.log(`MongoDB 연결됨 ${safeUri(uri)}`);
@@ -189,7 +196,7 @@ async function connectMongo() {
 
 async function ensureMongo() {
   if (mongoReady()) return true;
-  if (!process.env.MONGO_URI && !process.env.VERCEL) return false;
+  if (!process.env.MONGO_URI) return false;
   return connectMongo();
 }
 

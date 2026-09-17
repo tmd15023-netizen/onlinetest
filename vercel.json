@@ -1,18 +1,24 @@
 {
   "version": 2,
   "builds": [
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "css/**", "use": "@vercel/static" },
+    { "src": "js/**", "use": "@vercel/static" },
+    { "src": "img/**", "use": "@vercel/static" },
     {
       "src": "server.js",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": "{index.html,css/**,js/**,img/**,db.js,parse-pdf.js,package.json}"
+        "includeFiles": "{db.js,parse-pdf.js,js/data.js,js/question.js,package.json}"
       }
     }
   ],
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "server.js"
-    }
+    { "src": "/api/(.*)", "dest": "server.js" },
+    { "src": "/media/(.*)", "dest": "server.js" },
+    { "src": "/css/(.*)", "dest": "/css/$1" },
+    { "src": "/js/(.*)", "dest": "/js/$1" },
+    { "src": "/img/(.*)", "dest": "/img/$1" },
+    { "src": "/", "dest": "/index.html" }
   ]
 }
