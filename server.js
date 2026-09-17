@@ -13,6 +13,7 @@ const {
   htmlToParseText,
 } = require("./parse-pdf.js");
 const { isShortQuestion, gradeQuestion } = require("./js/question.js");
+const { sanitizeNoticeHtml, noticePlainText } = require("./js/notice-format.js");
 const dbx = require("./db.js");
 
 const PORT = process.env.PORT || 8765;
@@ -191,7 +192,7 @@ function publicNotice(item) {
     pinned: Boolean(item.pinned),
     title: item.title || "",
     date: item.date || "",
-    body: item.body || "",
+    body: sanitizeNoticeHtml(item.body || ""),
   };
 }
 
@@ -204,6 +205,7 @@ async function listAllNotices() {
 }
 
 async function writeNotice(notice) {
+  notice.body = sanitizeNoticeHtml(notice.body || "");
   if (dbx.mongoReady()) {
     const saved = await dbx.upsertNotice(notice);
     const db = loadDb();
@@ -755,8 +757,8 @@ app.get("/api/admin/notices", auth, adminOnly, async (req, res) => {
 
 app.post("/api/admin/notices", auth, adminOnly, async (req, res) => {
   const title = String(req.body.title || "").trim();
-  const body = String(req.body.body || "").trim();
-  if (!title || !body) return res.status(400).json({ error: "제목과 내용을 입력해 주세요." });
+  const body = sanitizeNoticeHtml(req.body.body);
+  if (!title || !noticePlainText(body)) return res.status(400).json({ error: "제목과 내용을 입력해 주세요." });
   const notice = {
     id: uid("n"),
     title,
@@ -777,8 +779,8 @@ app.put("/api/admin/notices/:id", auth, adminOnly, async (req, res) => {
   const current = list.find((item) => item.id === req.params.id);
   if (!current) return res.status(404).json({ error: "공지를 찾을 수 없습니다." });
   const title = String(req.body.title || "").trim();
-  const body = String(req.body.body || "").trim();
-  if (!title || !body) return res.status(400).json({ error: "제목과 내용을 입력해 주세요." });
+  const body = sanitizeNoticeHtml(req.body.body);
+  if (!title || !noticePlainText(body)) return res.status(400).json({ error: "제목과 내용을 입력해 주세요." });
   try {
     res.json(
       await writeNotice({

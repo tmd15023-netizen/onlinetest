@@ -10,7 +10,7 @@
       "src": "server.js",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": "{db.js,parse-pdf.js,js/data.js,js/question.js,package.json}"
+        "includeFiles": "{db.js,parse-pdf.js,js/data.js,js/question.js,js/notice-format.js,package.json}"
       }
     }
   ],

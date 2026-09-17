@@ -43,6 +43,16 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function noticeBodyHtml(body, extraClass = "") {
+  const html = window.NoticeFormat ? NoticeFormat.sanitizeNoticeHtml(body) : escapeHtml(body || "");
+  return `<div class="notice-body${extraClass ? ` ${extraClass}` : ""}">${html}</div>`;
+}
+
+function noticeExcerpt(body) {
+  const text = window.NoticeFormat ? NoticeFormat.noticePlainText(body) : String(body || "");
+  return escapeHtml(text.replace(/\s+/g, " "));
+}
+
 function safeImageSrc(src) {
   const value = String(src || "").trim();
   if (
@@ -498,7 +508,7 @@ function renderNotices() {
         ${selected.pinned ? `<span class="pin">고정</span>` : ""}
         <h2>${escapeHtml(selected.title)}</h2>
         <p style="color:var(--text-muted);font-size:13px;margin-bottom:18px">${selected.date}</p>
-        <p style="font-size:15px;line-height:1.7">${escapeHtml(selected.body)}</p>
+        ${noticeBodyHtml(selected.body)}
       </article>
     `
     : `
@@ -516,7 +526,7 @@ function renderNotices() {
             ${item.pinned ? `<span class="pin">고정</span>` : `<span class="pin" style="background:#f3f5f9;color:#98a">일반</span>`}
             <div>
               <h3>${escapeHtml(item.title)}</h3>
-              <p>${escapeHtml(item.body)}</p>
+              <p>${noticeExcerpt(item.body)}</p>
             </div>
             <time>${item.date}</time>
           </a>

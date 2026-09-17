@@ -960,7 +960,18 @@ async function renderAdminNotices() {
         <form id="notice-form" class="admin-form">
           <input type="hidden" name="noticeId" value="" />
           <div class="field"><label>제목</label><input name="noticeTitle" required placeholder="예: 모의고사 3회차가 공개되었습니다." /></div>
-          <div class="field"><label>내용</label><textarea name="noticeBody" rows="4" required placeholder="학습자에게 보여줄 내용을 입력하세요."></textarea></div>
+          <div class="field">
+            <label>내용</label>
+            <div class="notice-editor">
+              <div class="notice-toolbar">
+                <button type="button" data-notice-cmd="bold" title="굵게"><b>가</b></button>
+                <button type="button" data-notice-cmd="justifyLeft" title="왼쪽 정렬">왼쪽</button>
+                <button type="button" data-notice-cmd="justifyCenter" title="가운데 정렬">가운데</button>
+                <button type="button" data-notice-cmd="justifyRight" title="오른쪽 정렬">오른쪽</button>
+              </div>
+              <div class="notice-compose" contenteditable="true" data-notice-compose data-placeholder="학습자에게 보여줄 내용을 입력하세요. Enter로 줄을 바꾸고, 굵게·정렬 단추를 사용할 수 있습니다."></div>
+            </div>
+          </div>
           <label class="check-row"><input type="checkbox" name="noticePinned" /> 상단 고정</label>
           <div class="modal-actions" style="justify-content:flex-start;margin-top:12px">
             <button class="btn btn-primary" type="submit" id="notice-submit">공지 등록</button>
@@ -978,7 +989,7 @@ async function renderAdminNotices() {
             <div class="list-row">
               <div>
                 <h3>${item.pinned ? `<span class="pin">고정</span> ` : ""}${escapeHtml(item.title)}</h3>
-                <p>${escapeHtml(item.body)}</p>
+                <p>${noticeExcerpt(item.body)}</p>
                 <p>${escapeHtml(item.date || "")}</p>
               </div>
               <div class="aside member-actions">
@@ -1000,20 +1011,52 @@ async function renderAdminNotices() {
   const submit = document.getElementById("notice-submit");
   const titleEl = document.getElementById("notice-form-title");
   const banner = document.getElementById("notice-banner");
+  const compose = form.querySelector("[data-notice-compose]");
+  const readNoticeBody = () => (window.NoticeFormat ? NoticeFormat.sanitizeNoticeHtml(compose.innerHTML) : compose.innerText);
+  const setNoticeBody = (html) => {
+    compose.innerHTML = window.NoticeFormat ? NoticeFormat.noticeToEditorHtml(html) : escapeHtml(html || "").replace(/\n/g, "<br>");
+  };
   const resetForm = () => {
     form.reset();
     form.noticeId.value = "";
+    setNoticeBody("");
     submit.textContent = "공지 등록";
     titleEl.textContent = "새 공지 등록";
     cancel.hidden = true;
   };
+  form.querySelectorAll("[data-notice-cmd]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      compose.focus();
+      document.execCommand(btn.dataset.noticeCmd, false, null);
+    });
+  });
+  compose.addEventListener("focus", () => {
+    try {
+      document.execCommand("defaultParagraphSeparator", false, "p");
+    } catch (err) {
+      /* ignore */
+    }
+  });
+  compose.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const html = e.clipboardData.getData("text/html");
+    const text = e.clipboardData.getData("text/plain");
+    const insert = window.NoticeFormat
+      ? NoticeFormat.sanitizeNoticeHtml(html || text)
+      : escapeHtml(text).replace(/\n/g, "<br>");
+    document.execCommand("insertHTML", false, insert || escapeHtml(text).replace(/\n/g, "<br>"));
+  });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const body = {
       title: form.noticeTitle.value.trim(),
-      body: form.noticeBody.value.trim(),
+      body: readNoticeBody(),
       pinned: form.noticePinned.checked,
     };
+    if (!body.title || !(window.NoticeFormat ? NoticeFormat.noticePlainText(body.body) : body.body.trim())) {
+      setBanner(banner, "제목과 내용을 입력해 주세요.", false);
+      return;
+    }
     try {
       if (form.noticeId.value) await Api.updateNotice(form.noticeId.value, body);
       else await Api.createNotice(body);
@@ -1029,7 +1072,7 @@ async function renderAdminNotices() {
       if (!item) return;
       form.noticeId.value = item.id;
       form.noticeTitle.value = item.title;
-      form.noticeBody.value = item.body;
+      setNoticeBody(item.body);
       form.noticePinned.checked = Boolean(item.pinned);
       submit.textContent = "공지 저장";
       titleEl.textContent = "공지 수정";
