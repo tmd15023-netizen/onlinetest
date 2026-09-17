@@ -1,0 +1,384 @@
+require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const mongoose = require("mongoose");
+
+const STORE_PATH = path.join(__dirname, "data", "store.json");
+
+const userSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true },
+    name: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    createdAt: { type: String, default: () => new Date().toISOString() },
+    lastLoginAt: { type: String, default: "" },
+    examNo: { type: String, default: "" },
+    disabled: { type: Boolean, default: false },
+  },
+  { collection: "users" }
+);
+
+const attemptSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true },
+    userId: String,
+    userName: String,
+    examId: String,
+    title: String,
+    correct: Number,
+    total: Number,
+    percent: Number,
+    at: String,
+    review: { type: Array, default: [] },
+  },
+  { collection: "attempts" }
+);
+
+const settingsSchema = new mongoose.Schema(
+  {
+    key: { type: String, default: "app", unique: true },
+    entryCode: { type: String, required: true },
+    adminId: { type: String, required: true },
+    adminPassword: { type: String, required: true },
+    updatedAt: { type: String, default: () => new Date().toISOString() },
+  },
+  { collection: "settings" }
+);
+
+const examSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true },
+    title: String,
+    desc: String,
+    category: String,
+    minutes: Number,
+    tag: String,
+    questionCount: Number,
+    seed: Number,
+    demoBest: Number,
+    password: { type: String, default: "" },
+    questions: { type: Array, default: [] },
+  },
+  { collection: "exams" }
+);
+
+const noticeSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true },
+    pinned: { type: Boolean, default: false },
+    title: String,
+    date: String,
+    body: String,
+    createdAt: { type: String, default: () => new Date().toISOString() },
+  },
+  { collection: "notices" }
+);
+
+const User = mongoose.model("User", userSchema);
+const Attempt = mongoose.model("Attempt", attemptSchema);
+const Settings = mongoose.model("Settings", settingsSchema);
+const Exam = mongoose.model("Exam", examSchema);
+const Notice = mongoose.model("Notice", noticeSchema);
+
+let connected = false;
+
+function mongoReady() {
+  return connected && mongoose.connection.readyState === 1;
+}
+
+function safeUri(uri) {
+  return String(uri || "").replace(/\/\/([^/@]+)@/, "//***@");
+}
+
+async function migrateFromJson() {
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
+  } catch (err) {
+    return;
+  }
+  if (Array.isArray(raw.users) && raw.users.length && (await User.countDocuments()) === 0) {
+    await User.insertMany(
+      raw.users.map((item) => ({
+        id: item.id,
+        name: item.name,
+        password: item.password,
+        createdAt: item.createdAt || new Date().toISOString(),
+        lastLoginAt: "",
+        disabled: false,
+      }))
+    );
+    console.log(`회원 ${raw.users.length}명을 MongoDB로 옮겼습니다.`);
+  }
+  if (Array.isArray(raw.attempts) && raw.attempts.length && (await Attempt.countDocuments()) === 0) {
+    await Attempt.insertMany(raw.attempts);
+    console.log(`응시 기록 ${raw.attempts.length}건을 MongoDB로 옮겼습니다.`);
+  }
+  if (raw.settings && !(await Settings.findOne({ key: "app" }).lean())) {
+    await Settings.create({
+      key: "app",
+      entryCode: raw.settings.entryCode,
+      adminId: raw.settings.adminId,
+      adminPassword: raw.settings.adminPassword,
+      updatedAt: new Date().toISOString(),
+    });
+    console.log("관리자 비밀번호·입장코드를 MongoDB로 옮겼습니다.");
+  }
+  if (Array.isArray(raw.exams) && raw.exams.length && (await Exam.countDocuments()) === 0) {
+    await Exam.insertMany(raw.exams);
+    console.log(`시험 ${raw.exams.length}개를 MongoDB로 옮겼습니다.`);
+  }
+  if (Array.isArray(raw.notices) && raw.notices.length && (await Notice.countDocuments()) === 0) {
+    await Notice.insertMany(raw.notices);
+    console.log(`공지 ${raw.notices.length}건을 MongoDB로 옮겼습니다.`);
+  }
+}
+
+async function connectMongo() {
+  const uri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/oncodelab_exam";
+  try {
+    await mongoose.connect(uri, { serverSelectionTimeoutMS: 12000 });
+    connected = true;
+    await migrateFromJson();
+    console.log(`MongoDB 연결됨 ${safeUri(uri)}`);
+  } catch (err) {
+    connected = false;
+    console.error("MongoDB 연결 실패:", err.message);
+  }
+}
+
+function formatExamNo(value) {
+  const n = parseInt(String(value || "").replace(/\D/g, ""), 10);
+  return Number.isFinite(n) && n > 0 ? String(n).padStart(4, "0") : "";
+}
+
+function nextExamNoFromList(users) {
+  let max = 1000;
+  (users || []).forEach((user) => {
+    const n = parseInt(formatExamNo(user.examNo), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  });
+  return String(max + 1).padStart(4, "0");
+}
+
+function publicUser(user, extra = {}) {
+  return {
+    id: user.id,
+    name: user.name,
+    examNo: formatExamNo(user.examNo),
+    createdAt: user.createdAt,
+    lastLoginAt: user.lastLoginAt || "",
+    disabled: Boolean(user.disabled),
+    ...extra,
+  };
+}
+
+async function nextExamNo() {
+  if (!mongoReady()) return "1001";
+  const users = await User.find({}, { examNo: 1 }).lean();
+  return nextExamNoFromList(users);
+}
+
+async function ensureExamNo(user) {
+  if (!user) return user;
+  const current = formatExamNo(user.examNo);
+  if (current) {
+    user.examNo = current;
+    return user;
+  }
+  const examNo = await nextExamNo();
+  user.examNo = examNo;
+  if (mongoReady() && user.id) {
+    await User.updateOne({ id: user.id }, { $set: { examNo } });
+  }
+  return user;
+}
+
+async function findUserByName(name) {
+  if (mongoReady()) return User.findOne({ name }).lean();
+  return null;
+}
+
+async function createUser(user) {
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  await User.create(user);
+  return user;
+}
+
+async function touchLogin(userId) {
+  if (!mongoReady()) return;
+  await User.updateOne({ id: userId }, { $set: { lastLoginAt: new Date().toISOString() } });
+}
+
+async function saveAttempt(attempt) {
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  await Attempt.create(attempt);
+}
+
+async function deleteAttempt(id) {
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  return Attempt.findOneAndDelete({ id }).lean();
+}
+
+async function listAttempts(userId) {
+  if (!mongoReady()) return [];
+  const query = userId ? { userId } : {};
+  return Attempt.find(query).sort({ at: -1 }).limit(300).lean();
+}
+
+async function listUsers() {
+  if (!mongoReady()) return [];
+  const users = await User.find({}).sort({ createdAt: -1 }).lean();
+  const counts = await Attempt.aggregate([{ $group: { _id: "$userId", count: { $sum: 1 }, last: { $max: "$at" } } }]);
+  const byId = Object.fromEntries(counts.map((item) => [item._id, item]));
+  return users.map((user) =>
+    publicUser(user, {
+      attemptCount: (byId[user.id] && byId[user.id].count) || 0,
+      lastAttemptAt: (byId[user.id] && byId[user.id].last) || "",
+    })
+  );
+}
+
+async function setUserDisabled(id, disabled) {
+  const user = await User.findOneAndUpdate({ id }, { $set: { disabled: Boolean(disabled) } }, { new: true }).lean();
+  return user;
+}
+
+async function resetUserPassword(id, passwordHash) {
+  const user = await User.findOneAndUpdate({ id }, { $set: { password: passwordHash } }, { new: true }).lean();
+  return user;
+}
+
+async function deleteUser(id) {
+  const user = await User.findOneAndDelete({ id }).lean();
+  if (user) await Attempt.deleteMany({ userId: id });
+  return user;
+}
+
+async function getSettings() {
+  if (!mongoReady()) return null;
+  return Settings.findOne({ key: "app" }).lean();
+}
+
+async function saveSettings(patch) {
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  const { _id, __v, ...clean } = patch;
+  const next = {
+    ...clean,
+    key: "app",
+    updatedAt: new Date().toISOString(),
+  };
+  return Settings.findOneAndUpdate({ key: "app" }, { $set: next }, { upsert: true, new: true }).lean();
+}
+
+async function ensureSettings(defaults) {
+  if (!mongoReady()) return defaults;
+  const current = await getSettings();
+  if (current) return current;
+  await Settings.create({ key: "app", ...defaults, updatedAt: new Date().toISOString() });
+  return getSettings();
+}
+
+async function listExams() {
+  if (!mongoReady()) return [];
+  return Exam.find({}).lean();
+}
+
+async function findExam(id) {
+  if (!mongoReady()) return null;
+  return Exam.findOne({ id }).lean();
+}
+
+async function upsertExam(exam) {
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  const { _id, __v, ...payload } = exam;
+  return Exam.findOneAndUpdate({ id: exam.id }, { $set: payload }, { upsert: true, new: true }).lean();
+}
+
+async function deleteExam(id) {
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  return Exam.findOneAndDelete({ id }).lean();
+}
+
+async function ensureExams(defaults) {
+  if (!mongoReady()) return defaults;
+  const count = await Exam.countDocuments();
+  if (count > 0) return listExams();
+  if (defaults.length) await Exam.insertMany(defaults);
+  return listExams();
+}
+
+function sortNotices(list) {
+  return [...(list || [])].sort((a, b) => {
+    if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+    return String(b.date || "").localeCompare(String(a.date || ""), "ko");
+  });
+}
+
+async function listNotices() {
+  if (!mongoReady()) return [];
+  return sortNotices(await Notice.find({}).lean());
+}
+
+async function findNotice(id) {
+  if (!mongoReady()) return null;
+  return Notice.findOne({ id }).lean();
+}
+
+async function upsertNotice(notice) {
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  const { _id, __v, ...clean } = notice;
+  return Notice.findOneAndUpdate({ id: clean.id }, { $set: clean }, { upsert: true, new: true }).lean();
+}
+
+async function deleteNotice(id) {
+  if (!mongoReady()) return;
+  await Notice.deleteOne({ id });
+}
+
+async function ensureNotices(defaults) {
+  if (!mongoReady()) return defaults;
+  const count = await Notice.countDocuments();
+  if (count > 0) return listNotices();
+  if (defaults && defaults.length) await Notice.insertMany(defaults);
+  return listNotices();
+}
+
+module.exports = {
+  connectMongo,
+  mongoReady,
+  User,
+  Attempt,
+  Settings,
+  Exam,
+  Notice,
+  publicUser,
+  ensureExamNo,
+  formatExamNo,
+  nextExamNo,
+  nextExamNoFromList,
+  findUserByName,
+  createUser,
+  touchLogin,
+  saveAttempt,
+  deleteAttempt,
+  listAttempts,
+  listUsers,
+  setUserDisabled,
+  resetUserPassword,
+  deleteUser,
+  getSettings,
+  saveSettings,
+  ensureSettings,
+  listExams,
+  findExam,
+  upsertExam,
+  deleteExam,
+  ensureExams,
+  listNotices,
+  findNotice,
+  upsertNotice,
+  deleteNotice,
+  ensureNotices,
+  sortNotices,
+};
