@@ -34,6 +34,7 @@ let state = {
   jumpToIdx: null,
   examScrolling: false,
 };
+let renderSeq = 0;
 
 function escapeHtml(value) {
   return String(value)
@@ -443,8 +444,42 @@ function bindExamList(rerender) {
   });
 }
 
+function asNoticeList(value) {
+  if (Array.isArray(value)) return value.filter((item) => item && (item.id || item.title));
+  if (value && Array.isArray(value.notices)) return asNoticeList(value.notices);
+  return [];
+}
+
+function saveNoticeCache(list) {
+  const notices = asNoticeList(list);
+  window.LIVE_NOTICES = notices;
+  try {
+    sessionStorage.setItem("oncodelab.notices", JSON.stringify(notices));
+  } catch (err) {
+    /* ignore */
+  }
+  return notices;
+}
+
+function readNoticeCache() {
+  const live = asNoticeList(window.LIVE_NOTICES);
+  if (live.length) return live;
+  try {
+    return asNoticeList(JSON.parse(sessionStorage.getItem("oncodelab.notices") || "[]"));
+  } catch (err) {
+    return [];
+  }
+}
+
 function getNoticeList() {
-  return Array.isArray(window.LIVE_NOTICES) ? window.LIVE_NOTICES : [];
+  return readNoticeCache();
+}
+
+function dashboardNotices() {
+  const list = getNoticeList();
+  const pinned = list.filter((item) => item.pinned);
+  const rest = list.filter((item) => !item.pinned);
+  return pinned.concat(rest).slice(0, 3);
 }
 
 function renderDashboard() {
@@ -461,18 +496,19 @@ function renderDashboard() {
           <div class="card-title">${ICONS.pin} 공지사항</div>
           <a class="link-more" href="#/notices">전체 보기</a>
         </div>
-        ${getNoticeList()
-          .slice(0, 3)
-          .map(
-            (item) => `
+        ${
+          dashboardNotices()
+            .map(
+              (item) => `
           <a class="notice-row" href="#/notices?id=${item.id}">
-            ${item.pinned ? `<span class="pin">고정</span>` : `<span style="width:36px"></span>`}
+            ${item.pinned ? `<span class="pin">고정</span>` : `<span class="pin pin-quiet">일반</span>`}
             <span class="notice-text">${escapeHtml(item.title)}</span>
-            <span class="notice-date">${item.date}</span>
+            <span class="notice-date">${escapeHtml(item.date || "")}</span>
           </a>
         `
-          )
-          .join("")}
+            )
+            .join("") || `<p class="notice-empty">등록된 공지가 없습니다.</p>`
+        }
       </section>
       ${examListHtml()}
     `,
@@ -1207,6 +1243,7 @@ function renderResult() {
 function render() {
   stopExamTimer();
   state.sidebarOpen = false;
+  const seq = ++renderSeq;
   const { path, params } = route();
   const user = Storage.getUser();
   const loggedIn = Boolean(user && Api.token());
@@ -1257,12 +1294,16 @@ function render() {
     return;
   }
 
-  loadExams()
-    .then(() =>
-      Promise.all([Api.notices().catch(() => []), Api.myAttempts().catch(() => [])])
-    )
-    .then(([notices, attempts]) => {
-      window.LIVE_NOTICES = notices;
+  Promise.all([
+    loadExams(),
+    Api.notices()
+      .then((data) => saveNoticeCache(data))
+      .catch(() => readNoticeCache()),
+    Api.myAttempts().catch(() => []),
+  ])
+    .then(([, notices, attempts]) => {
+      if (seq !== renderSeq) return;
+      saveNoticeCache(notices);
       window.MY_ATTEMPTS = attempts;
       state.noticeId = params.get("id");
       if (path === "/notices") renderNotices();
@@ -1273,6 +1314,7 @@ function render() {
       else renderDashboard();
     })
     .catch(() => {
+      if (seq !== renderSeq) return;
       Api.clearSession();
       sessionStorage.setItem("oncodelab.loggedOut", "1");
       renderAuth();

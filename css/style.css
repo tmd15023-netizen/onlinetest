@@ -363,6 +363,17 @@ button {
   color: var(--primary);
 }
 
+.pin-quiet {
+  background: #f3f5f9;
+  color: #98a2b3;
+}
+
+.notice-empty {
+  margin: 8px 0 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 .pin {
   display: inline-flex;
   align-items: center;

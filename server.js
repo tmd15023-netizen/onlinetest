@@ -197,6 +197,7 @@ function publicNotice(item) {
 }
 
 async function listAllNotices() {
+  await dbx.ensureMongo();
   if (dbx.mongoReady()) {
     return (await dbx.listNotices()).map(publicNotice);
   }
