@@ -165,10 +165,6 @@ async function migrateFromJson() {
     await Exam.insertMany(raw.exams);
     console.log(`시험 ${raw.exams.length}개를 MongoDB로 옮겼습니다.`);
   }
-  if (Array.isArray(raw.notices) && raw.notices.length && (await Notice.countDocuments()) === 0) {
-    await Notice.insertMany(raw.notices);
-    console.log(`공지 ${raw.notices.length}건을 MongoDB로 옮겼습니다.`);
-  }
 }
 
 async function connectMongo() {
@@ -513,11 +509,8 @@ async function deleteNotice(id) {
   await Notice.deleteOne({ id });
 }
 
-async function ensureNotices(defaults) {
-  if (!mongoReady()) return defaults;
-  const count = await Notice.countDocuments();
-  if (count > 0) return listNotices();
-  if (defaults && defaults.length) await Notice.insertMany(defaults);
+async function ensureNotices(_defaults) {
+  if (!mongoReady()) return [];
   return listNotices();
 }
 

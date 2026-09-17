@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const express = require("express");
-const { APP, EXAMS, NOTICES, pickQuestions, examGradeLabel } = require("./js/data.js");
+const { APP, EXAMS, pickQuestions, examGradeLabel } = require("./js/data.js");
 const {
   parseQuestionsFromText,
   parseAnswerKeyFromText,
@@ -80,7 +80,7 @@ function defaultDb() {
       questions: [],
     })),
     attempts: [],
-    notices: NOTICES.map((item) => ({ ...item })),
+    notices: [],
   };
 }
 
@@ -197,15 +197,10 @@ function publicNotice(item) {
 
 async function listAllNotices() {
   if (dbx.mongoReady()) {
-    const seeded = await dbx.ensureNotices(NOTICES);
-    return (seeded || []).map(publicNotice);
+    return (await dbx.listNotices()).map(publicNotice);
   }
   const db = loadDb();
-  if (!Array.isArray(db.notices) || !db.notices.length) {
-    db.notices = NOTICES.map((item) => ({ ...item }));
-    saveDb(db);
-  }
-  return dbx.sortNotices(db.notices).map(publicNotice);
+  return dbx.sortNotices(db.notices || []).map(publicNotice);
 }
 
 async function writeNotice(notice) {

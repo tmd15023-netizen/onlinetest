@@ -434,7 +434,7 @@ function bindExamList(rerender) {
 }
 
 function getNoticeList() {
-  return window.LIVE_NOTICES && window.LIVE_NOTICES.length ? window.LIVE_NOTICES : NOTICES;
+  return Array.isArray(window.LIVE_NOTICES) ? window.LIVE_NOTICES : [];
 }
 
 function renderDashboard() {
@@ -1249,7 +1249,7 @@ function render() {
 
   loadExams()
     .then(() =>
-      Promise.all([Api.notices().catch(() => NOTICES), Api.myAttempts().catch(() => [])])
+      Promise.all([Api.notices().catch(() => []), Api.myAttempts().catch(() => [])])
     )
     .then(([notices, attempts]) => {
       window.LIVE_NOTICES = notices;
