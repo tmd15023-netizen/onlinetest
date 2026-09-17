@@ -1,4 +1,4 @@
-const Api = {
+window.Api = {
   token() {
     return sessionStorage.getItem("oncodelab.token") || "";
   },
@@ -173,6 +173,8 @@ const Api = {
     });
   },
 };
+
+const Api = window.Api;
 
 async function loadExams() {
   const list = await Api.exams();

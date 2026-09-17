@@ -167,17 +167,21 @@ function renderAuth(mode) {
     const errorEl = document.getElementById("auth-error");
     errorEl.hidden = true;
     try {
+      const api = window.Api;
+      if (!api || typeof api.adminLogin !== "function") {
+        throw new Error("페이지를 Ctrl+F5로 새로고침한 뒤 다시 로그인해 주세요.");
+      }
       const result = admin
-        ? await Api.adminLogin({
+        ? await api.adminLogin({
             id: document.getElementById("admin-id").value.trim(),
             password: document.getElementById("admin-pw").value.trim(),
           })
-        : await Api.login({
+        : await api.login({
             name: document.getElementById("name").value.trim(),
             password: document.getElementById("password").value.trim(),
             entryCode: document.getElementById("entryCode").value.trim(),
           });
-      Api.setSession(result.token, result.user);
+      api.setSession(result.token, result.user);
       if (admin) sessionStorage.removeItem("oncodelab.view");
       location.hash = admin ? "#/admin" : "#/";
       render();

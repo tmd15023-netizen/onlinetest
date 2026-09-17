@@ -459,6 +459,13 @@ app.use((req, res, next) => {
     .then(() => dbx.ensureMongo())
     .finally(() => next());
 });
+app.use((req, res, next) => {
+  if (req.path === "/" || /\.(?:html|js|css)$/i.test(req.path)) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+  }
+  next();
+});
 app.use(express.json({ limit: "50mb" }));
 app.use("/data", (req, res) => res.sendStatus(404));
 app.use("/media", express.static(MEDIA_ROOT));
