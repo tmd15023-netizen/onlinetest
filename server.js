@@ -1207,6 +1207,10 @@ app.delete("/api/admin/users/:id", auth, adminOnly, async (req, res) => {
     if (index < 0) return res.status(404).json({ error: "회원을 찾을 수 없습니다." });
     const userId = db.users[index].id;
     db.users.splice(index, 1);
+    db.users.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    db.users.forEach((item, i) => {
+      item.examNo = String(i + 1).padStart(4, "0");
+    });
     db.attempts = (db.attempts || []).filter((item) => item.userId !== userId);
     saveDb(db);
     res.json({ ok: true });

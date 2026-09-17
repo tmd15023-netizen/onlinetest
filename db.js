@@ -238,11 +238,6 @@ async function nextExamNo() {
 async function resequenceExamNos() {
   if (!mongoReady()) return;
   const users = await User.find({}).sort({ createdAt: 1, _id: 1 }).lean();
-  const needs = users.some((user) => {
-    const n = parseInt(formatExamNo(user.examNo), 10);
-    return !n || n >= 1000;
-  });
-  if (!needs) return;
   for (let i = 0; i < users.length; i += 1) {
     const examNo = String(i + 1).padStart(4, "0");
     if (formatExamNo(users[i].examNo) !== examNo) {
@@ -398,6 +393,7 @@ async function resetUserPassword(id, passwordHash) {
 async function deleteUser(id) {
   const user = await User.findOneAndDelete({ id }).lean();
   if (user) await Attempt.deleteMany({ userId: id });
+  await resequenceExamNos();
   return user;
 }
 
