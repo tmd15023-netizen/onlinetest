@@ -233,6 +233,78 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function loadMammothBrowser() {
+  if (window.mammoth) return Promise.resolve(window.mammoth);
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/mammoth@1.12.3/mammoth.browser.min.js";
+    script.onload = () => (window.mammoth ? resolve(window.mammoth) : reject(new Error("Word 분석 모듈을 불러오지 못했습니다.")));
+    script.onerror = () => reject(new Error("Word 분석 모듈을 불러오지 못했습니다."));
+    document.head.appendChild(script);
+  });
+}
+
+function dataUriToBlob(dataUri) {
+  const match = String(dataUri || "").match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: match[1] });
+}
+
+async function replaceHtmlDataImages(examId, html, onProgress) {
+  const found = [...String(html || "").matchAll(/<img\b[^>]*\bsrc\s*=\s*(["'])(data:image\/[\s\S]*?)\1/gi)].map((item) => item[2]);
+  const unique = [...new Set(found)];
+  if (!unique.length) return html;
+  const urls = new Map();
+  for (let i = 0; i < unique.length; i += 1) {
+    const src = unique[i];
+    const blob = dataUriToBlob(src);
+    if (!blob || blob.size < 32) {
+      urls.set(src, "");
+      continue;
+    }
+    if (onProgress) onProgress(`문항 이미지 ${i + 1}/${unique.length}장 저장 중...`);
+    try {
+      const saved = await Api.uploadExamMedia(examId, blob, blob.type);
+      urls.set(src, saved && saved.url ? saved.url : "");
+    } catch (err) {
+      urls.set(src, src.length < 3500000 ? src : "");
+    }
+  }
+  let out = html;
+  urls.forEach((url, src) => {
+    out = out.split(src).join(url || "");
+  });
+  return out;
+}
+
+async function importDocxSmart(id, file, onProgress) {
+  try {
+    if (onProgress) onProgress("Word 문항을 브라우저에서 읽는 중입니다...");
+    const mammoth = await loadMammothBrowser();
+    const arrayBuffer = await file.arrayBuffer();
+    const htmlResult = await mammoth.convertToHtml(
+      { arrayBuffer },
+      { convertImage: mammoth.images.dataUri, ignoreEmptyParagraphs: false }
+    );
+    const rawResult = await mammoth.extractRawText({ arrayBuffer });
+    const html = await replaceHtmlDataImages(id, htmlResult.value || "", onProgress);
+    if (onProgress) onProgress("문항 번호를 인식하는 중입니다...");
+    return await Api.importDocxParsed(id, {
+      filename: file.name,
+      html,
+      rawText: rawResult.value || "",
+    });
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : "");
+    if (/문항을 찾지/.test(msg) || file.size > 3800000) throw err;
+    if (onProgress) onProgress("서버에서 Word 문항을 다시 읽는 중입니다...");
+    return Api.importDocxFile(id, file);
+  }
+}
+
 function importKind(file) {
   const name = String(file && file.name ? file.name : "").toLowerCase();
   const type = String(file && file.type ? file.type : "");
@@ -626,10 +698,9 @@ async function runImportFiles(id) {
   }
   setBanner(banner, kind.isDocx ? "Word 문항을 읽는 중입니다..." : "PDF 문항을 읽는 중입니다...", true);
   try {
-    const dataUrl = await readFileAsDataUrl(qFile);
     const result = kind.isDocx
-      ? await Api.importDocx(id, dataUrl, qFile.name)
-      : await Api.importPdf(id, dataUrl, qFile.name);
+      ? await importDocxSmart(id, qFile, (msg) => setBanner(banner, msg, true))
+      : await Api.importPdfFile(id, qFile);
     window._pdfDraft = result.questions;
     const answerInput = document.getElementById("answer-file");
     const explainInput = document.getElementById("explain-file");

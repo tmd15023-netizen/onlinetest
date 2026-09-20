@@ -37,10 +37,10 @@ function decodeEntities(value) {
 }
 
 function stripHtmlToText(value) {
-  return decodeEntities(
+  return decodeHtmlEntities(
     String(value || "")
       .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+      .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, "\n")
       .replace(/<[^>]+>/g, " ")
   )
     .replace(/[ \t]+\n/g, "\n")
@@ -185,6 +185,84 @@ function extractHtmlTables(html) {
   return { html: out, tables };
 }
 
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return code ? String.fromCodePoint(code) : " ";
+    })
+    .replace(/&#(\d+);/g, (_, num) => {
+      const code = Number(num);
+      return code ? String.fromCodePoint(code) : " ";
+    })
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function collectHtmlImages(html) {
+  const images = [];
+  String(html || "").replace(/<img\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi, (_, _q, src) => {
+    const clean = String(src || "").trim();
+    if (clean) images.push(clean);
+    return "";
+  });
+  return images;
+}
+
+function rowsToExamText(rows) {
+  return (rows || [])
+    .map((row) => {
+      const cells = (Array.isArray(row) ? row : [row]).map((cell) => String(cell || "").trim());
+      if (cells.length >= 2 && /^\d{1,3}$/.test(cells[0])) {
+        return `${cells[0]}. ${cells.slice(1).filter(Boolean).join(" ")}`;
+      }
+      if (cells.length >= 2 && /^\d{1,3}\s*(?:[.．。번]|[)）])$/.test(cells[0])) {
+        return `${cells[0].replace(/\s+/g, "")} ${cells.slice(1).filter(Boolean).join(" ")}`;
+      }
+      return cells.filter(Boolean).join(" ");
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function tableLooksLikeQuestions(rows, tableHtml) {
+  const text = rowsToExamText(rows);
+  if (/[①②③④⑤⑴⑵⑶⑷⑸❶❷❸❹❺]/.test(text)) return true;
+  if ((text.match(/(?:^|\n)\s*\d{1,3}\s*(?:[.．。번]|[)）])/gm) || []).length >= 2) return true;
+  const numberedCells = (rows || []).filter((row) => /^\d{1,3}(?:\s*[.．。번)）])?$/.test(String((row && row[0]) || "").trim()));
+  if (numberedCells.length >= 2) return true;
+  if (/문제\s*\d+|문항\s*\d+/.test(text)) return true;
+  const imgCount = (String(tableHtml || "").match(/<img\b/gi) || []).length;
+  return imgCount > 0 && /\d{1,3}\s*(?:[.．번]|[)）])/.test(text);
+}
+
+function htmlListsToText(html) {
+  let src = String(html || "");
+  for (let guard = 0; guard < 80; guard += 1) {
+    const opens = [...src.matchAll(/<(ol|ul)\b[^>]*>/gi)];
+    if (!opens.length) break;
+    const last = opens[opens.length - 1];
+    const tag = last[1];
+    const start = last.index;
+    const openEnd = start + last[0].length;
+    const close = new RegExp(`</${tag}>`, "i").exec(src.slice(openEnd));
+    if (!close) break;
+    const inner = src.slice(openEnd, openEnd + close.index);
+    const ordered = /^ol$/i.test(tag);
+    let n = 0;
+    const converted = inner.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_, item) => {
+      n += 1;
+      return `\n${ordered ? `${n}. ` : ""}${item}\n`;
+    });
+    src = src.slice(0, start) + converted + src.slice(openEnd + close.index + close[0].length);
+  }
+  return src;
+}
+
 function htmlToParseText(html, options = {}) {
   const bank = [];
   const pushImg = (src) => {
@@ -193,35 +271,28 @@ function htmlToParseText(html, options = {}) {
     bank.push(clean);
     return `\n%%IMG${bank.length - 1}%%\n`;
   };
-  const extracted = extractHtmlTables(String(html || "").replace(/\r/g, ""));
+  let prepared = decodeHtmlEntities(htmlListsToText(String(html || "").replace(/\r/g, "")));
+  const extracted = extractHtmlTables(prepared);
   let out = extracted.html;
   extracted.tables.forEach((tableHtml, idx) => {
     const rows = htmlTableToRows(tableHtml);
-    if (options.tablesAsText) {
-      const text = rows.map((row) => row.filter(Boolean).join(" ")).filter(Boolean).join("\n");
-      out = out.replace(`%%TABLE${idx}%%`, text ? `\n${text}\n` : " ");
+    const innerImgs = collectHtmlImages(tableHtml);
+    const asText = options.tablesAsText || tableLooksLikeQuestions(rows, tableHtml);
+    if (asText) {
+      const text = rowsToExamText(rows);
+      const markers = innerImgs.map((src) => pushImg(src)).join("");
+      out = out.replace(`%%TABLE${idx}%%`, `\n${markers}${text ? `${text}\n` : ""}`);
       return;
     }
-    const innerImgs = [];
-    String(tableHtml || "").replace(/<img\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi, (_, _q, src) => {
-      innerImgs.push(String(src || "").trim());
-      return "";
-    });
     const svg = rowsToSvgDataUri(rows);
     const markers = [svg ? pushImg(svg) : "", ...innerImgs.map((src) => pushImg(src))].join("");
     out = out.replace(`%%TABLE${idx}%%`, markers || " ");
   });
   return out
     .replace(/<img\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi, (_, _quote, src) => pushImg(src))
-    .replace(/<\/(p|div|h[1-6]|li|section)>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr|section)>/gi, "\n")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
     .replace(/%%IMG(\d+)%%/g, (_, idx) => {
       const src = bank[Number(idx)] || "";
       return src ? `<<IMG ${src}>>` : "";
@@ -247,7 +318,10 @@ function normalizePdfText(raw) {
     .replace(/\u0000/g, "")
     .replace(/\r/g, "\n")
     .replace(/\f/g, "\n")
+    .replace(/[\u00a0\u202f\u2007\u3000]/g, " ")
+    .replace(/[\uFF10-\uFF19]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 48))
     .replace(/[ \t]+/g, " ")
+    .replace(/(^|\n)\s*(\d{1,3})\s*(?:[.．。번]|[)）])\s*(?:\n+\s*)+(?=[가-힣A-Za-z<【「])/g, "$1$2. ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -383,6 +457,15 @@ function splitChoices(body) {
   const circled = splitSequentialMarkers(body, ["①", "②", "③", "④", "⑤"]);
   const hangul = splitSequentialMarkers(body, ["ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ"]);
   const peeled = peelHangulStatements(circled.choices.length >= 2 ? circled.stem : body);
+
+  const parenCircled = splitSequentialMarkers(body, ["⑴", "⑵", "⑶", "⑷", "⑸"]);
+  if (parenCircled.choices.length >= 2 && circled.choices.length < 2) {
+    return {
+      stem: parenCircled.stem,
+      choices: parenCircled.choices.map((choice) => (isComboChoice(choice) ? normalizeComboToHangul(choice) : choice)),
+      labels: [],
+    };
+  }
 
   if (circled.choices.length >= 2) {
     const longItems = [];
@@ -781,21 +864,93 @@ function applyAnswersToQuestions(questions, answers) {
   };
 }
 
+function collectQuestionHits(text, re) {
+  const hits = [];
+  const matcher = new RegExp(re.source, re.flags);
+  let match;
+  while ((match = matcher.exec(text))) {
+    const no = Number(match[1]);
+    if (!Number.isFinite(no) || no < 1 || no > 300) continue;
+    hits.push({
+      no,
+      bodyStart: match.index + match[0].length,
+      at: match.index,
+    });
+  }
+  return hits;
+}
+
+function scoreQuestionHits(hits) {
+  if (!hits.length) return -1;
+  let score = hits.length;
+  if (hits[0].no === 1) score += 4;
+  for (let i = 1; i < hits.length; i += 1) {
+    const diff = hits[i].no - hits[i - 1].no;
+    if (diff === 1) score += 2;
+    else if (diff === 0) score -= 1;
+    else if (diff > 1 && diff <= 3) score += 0.5;
+    else if (diff < 0) score -= 0.5;
+  }
+  return score;
+}
+
+function findQuestionHits(questionText) {
+  const patterns = [
+    /(?:^|\n)\s*(?:[\[【\(]\s*)?(?:문제\s*|문항\s*|문\s*)?(\d{1,3})\s*(?:[\]】\)])?\s*(?:[.]|．|。|번)(?:\s+|(?=[가-힣A-Za-z<(【「]))/g,
+    /(?:^|\n)\s*(?:문제|문항)\s*(\d{1,3})(?=\s|[.．。번)])/g,
+    /(?:^|\n)\s*[【\[]\s*(\d{1,3})\s*[】\]]\s*/g,
+    /(?:^|\n)\s*(\d{1,3})\s*[)）](?=\s*[가-힣A-Za-z<【「])/g,
+  ];
+  let best = [];
+  let bestScore = -1;
+  patterns.forEach((re) => {
+    const hits = collectQuestionHits(questionText, re);
+    const score = scoreQuestionHits(hits);
+    if (score > bestScore) {
+      best = hits;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
+function parseScore(result) {
+  const questions = (result && result.questions) || [];
+  const mcq = questions.filter((item) => Array.isArray(item.choices) && item.choices.length >= 2).length;
+  return questions.length * 10 + mcq * 8 + Number(result && result.answerCount ? result.answerCount : 0);
+}
+
+function mergeQuestionMedia(target, source) {
+  const map = new Map((source || []).map((item) => [Number(item.no), item]));
+  (target || []).forEach((question) => {
+    const from = map.get(Number(question.no));
+    if (!from) return;
+    if (!(question.images || []).length && (from.images || []).length) question.images = from.images.slice();
+    const hasChoiceImg = (question.choiceImages || []).some((row) => Array.isArray(row) && row.length);
+    const srcChoiceImg = (from.choiceImages || []).some((row) => Array.isArray(row) && row.length);
+    if (!hasChoiceImg && srcChoiceImg) question.choiceImages = from.choiceImages.map((row) => (Array.isArray(row) ? row.slice() : []));
+  });
+  return target;
+}
+
+function pickRicherParse(results) {
+  const ranked = (results || []).filter((item) => item && Array.isArray(item.questions));
+  if (!ranked.length) return { text: "", questions: [], answerCount: 0, unmatched: [] };
+  ranked.sort((a, b) => parseScore(b) - parseScore(a));
+  const best = ranked[0];
+  const withImages = ranked.find((item) =>
+    (item.questions || []).some((q) => (q.images || []).length || (q.choiceImages || []).some((row) => Array.isArray(row) && row.length))
+  );
+  if (withImages && withImages !== best) mergeQuestionMedia(best.questions, withImages.questions);
+  return best;
+}
+
 function parseQuestionsFromText(raw) {
   const held = holdInlineImages(raw);
   const text = normalizePdfText(held.text);
   const imageBank = held.bank;
   const { questionText, answerText } = splitQuestionAndAnswerText(text);
-  const re = /(?:^|\n)\s*(?:문제\s*|문\s*)?(\d{1,3})\s*(?:[.]|．|번)\s+/g;
-  const hits = [];
-  let match;
-  while ((match = re.exec(questionText))) {
-    hits.push({
-      no: Number(match[1]),
-      bodyStart: match.index + match[0].length,
-      at: match.index,
-    });
-  }
+  const hits = findQuestionHits(questionText);
 
   const questions = [];
   hits.forEach((hit, index) => {
@@ -878,5 +1033,7 @@ if (typeof module !== "undefined" && module.exports) {
     splitQuestionAndAnswerText,
     tokenToChoiceIndex,
     htmlToParseText,
+    pickRicherParse,
+    parseScore,
   };
 }

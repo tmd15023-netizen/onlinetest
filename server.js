@@ -11,6 +11,7 @@ const {
   applyAnswersToQuestions,
   applyExplainsToQuestions,
   htmlToParseText,
+  pickRicherParse,
 } = require("./parse-pdf.js");
 const { isShortQuestion, gradeQuestion, normalizeMcqAnswer, isMultiMcq } = require("./js/question.js");
 const { sanitizeNoticeHtml, noticePlainText } = require("./js/notice-format.js");
@@ -284,6 +285,78 @@ function decodeUploadBuffer(dataUrl) {
   return Buffer.from(raw, "utf8");
 }
 
+function asUploadBuffer(input) {
+  if (Buffer.isBuffer(input)) return input;
+  if (input instanceof Uint8Array) return Buffer.from(input);
+  if (input && input.type === "Buffer" && Array.isArray(input.data)) return Buffer.from(input.data);
+  if (typeof input === "string") return decodeUploadBuffer(input);
+  return Buffer.alloc(0);
+}
+
+function readZipFile(buffer, name) {
+  try {
+    const zlib = require("zlib");
+    const src = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+    let eocd = -1;
+    const min = Math.max(0, src.length - 22 - 65535);
+    for (let i = src.length - 22; i >= min; i -= 1) {
+      if (src.readUInt32LE(i) === 0x06054b50) {
+        eocd = i;
+        break;
+      }
+    }
+    if (eocd < 0) return "";
+    const count = src.readUInt16LE(eocd + 10);
+    let cd = src.readUInt32LE(eocd + 16);
+    const want = String(name || "").replace(/\\/g, "/");
+    for (let n = 0; n < count && cd + 46 <= src.length; n += 1) {
+      if (src.readUInt32LE(cd) !== 0x02014b50) break;
+      const method = src.readUInt16LE(cd + 10);
+      const compSize = src.readUInt32LE(cd + 20);
+      const nameLen = src.readUInt16LE(cd + 28);
+      const extraLen = src.readUInt16LE(cd + 30);
+      const commentLen = src.readUInt16LE(cd + 32);
+      const localOff = src.readUInt32LE(cd + 42);
+      const fname = src.slice(cd + 46, cd + 46 + nameLen).toString("utf8").replace(/\\/g, "/");
+      if (fname === want) {
+        const localNameLen = src.readUInt16LE(localOff + 26);
+        const localExtra = src.readUInt16LE(localOff + 28);
+        const dataStart = localOff + 30 + localNameLen + localExtra;
+        const data = src.slice(dataStart, dataStart + compSize);
+        const raw = method === 0 ? data : method === 8 ? zlib.inflateRawSync(data) : null;
+        return raw ? raw.toString("utf8") : "";
+      }
+      cd += 46 + nameLen + extraLen + commentLen;
+    }
+  } catch (err) {
+    return "";
+  }
+  return "";
+}
+
+function docxXmlToText(xml) {
+  return String(xml || "")
+    .replace(/<w:tab\b[^>]*\/?>/g, "\t")
+    .replace(/<w:br\b[^>]*\/?>/g, "\n")
+    .replace(/<w:cr\b[^>]*\/?>/g, "\n")
+    .replace(/<\/w:p>/g, "\n")
+    .replace(/<w:drawing[\s\S]*?<\/w:drawing>/g, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = Number(n);
+      return code ? String.fromCodePoint(code) : " ";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+      const code = parseInt(h, 16);
+      return code ? String.fromCodePoint(code) : " ";
+    });
+}
+
 function safeExamId(id) {
   const value = String(id || "");
   return /^[a-zA-Z0-9._-]+$/.test(value) ? value : "";
@@ -420,12 +493,18 @@ async function persistQuestionMedia(examId, question) {
 }
 
 async function persistParsedQuestions(examId, questions) {
-  if (!examId || !Array.isArray(questions)) return questions;
-  for (const question of questions) {
-    const media = await persistQuestionMedia(examId, question);
-    question.images = media.images;
-    question.choiceImages = media.choiceImages;
-  }
+  if (!examId || !Array.isArray(questions) || !questions.length) return questions;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < questions.length) {
+      const idx = cursor;
+      cursor += 1;
+      const media = await persistQuestionMedia(examId, questions[idx]);
+      questions[idx].images = media.images;
+      questions[idx].choiceImages = media.choiceImages;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, questions.length) }, () => worker()));
   return questions;
 }
 
@@ -487,22 +566,18 @@ function clientQuestion(item, index, exam) {
 
 async function extractTextFromUpload(dataUrl, filename, options = {}) {
   const name = String(filename || "").toLowerCase();
-  const buffer = decodeUploadBuffer(dataUrl);
+  const buffer = asUploadBuffer(dataUrl);
   if (!buffer.length) throw new Error("파일이 비어 있습니다.");
   if (name.endsWith(".txt") || name.endsWith(".csv") || name.endsWith(".tsv")) {
     return buffer.toString("utf8").replace(/^\uFEFF/, "");
   }
   if (name.endsWith(".docx") || String(dataUrl).includes("wordprocessingml")) {
-    let mammoth;
-    try {
-      mammoth = require("mammoth");
-    } catch (err) {
-      throw new Error("Word 분석 모듈이 설치되어 있지 않습니다.");
-    }
-    const parsed = await mammoth.convertToHtml({ buffer }, { convertImage: mammoth.images.dataUri });
-    let text = htmlToParseText(parsed.value || "", { tablesAsText: Boolean(options.tablesAsText) });
+    const parts = await mammothDocxParts(buffer, options.persistImagesForExam || "");
+    const htmlText = htmlToParseText(parts.html, { tablesAsText: options.tablesAsText !== false });
+    const xmlText = docxXmlToText(readZipFile(buffer, "word/document.xml"));
+    const text = [htmlText, parts.raw, xmlText].filter(Boolean).sort((a, b) => b.length - a.length)[0] || "";
     if (options.persistImagesForExam) {
-      text = await persistInlineImagesInText(options.persistImagesForExam, text);
+      return persistInlineImagesInText(options.persistImagesForExam, text);
     }
     return text;
   }
@@ -520,6 +595,62 @@ async function extractTextFromUpload(dataUrl, filename, options = {}) {
     throw new Error("옛 .doc 파일은 지원하지 않습니다. Word에서 .docx로 저장해 주세요.");
   }
   throw new Error("PDF, Word(.docx), 텍스트(.txt) 파일만 사용할 수 있습니다.");
+}
+
+async function mammothDocxParts(buffer, persistExamId) {
+  let mammoth;
+  try {
+    mammoth = require("mammoth");
+  } catch (err) {
+    throw new Error("Word 분석 모듈이 설치되어 있지 않습니다.");
+  }
+  const convertImage = mammoth.images.imgElement(async (image) => {
+    let bytes = Buffer.alloc(0);
+    try {
+      bytes = Buffer.from(await image.read("base64"), "base64");
+    } catch (err) {
+      try {
+        const raw = await image.read();
+        bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw || []);
+      } catch (readErr) {
+        return { src: "" };
+      }
+    }
+    if (!bytes.length || bytes.length < 32) return { src: "" };
+    const mime = image.contentType || "image/png";
+    const dataUri = `data:${mime};base64,${bytes.toString("base64")}`;
+    if (persistExamId) {
+      const url = await saveDataUriImage(persistExamId, dataUri);
+      return { src: url || dataUri };
+    }
+    return { src: dataUri };
+  });
+  const html = await mammoth.convertToHtml({ buffer }, { convertImage, ignoreEmptyParagraphs: false });
+  const raw = await mammoth.extractRawText({ buffer });
+  return { html: html.value || "", raw: raw.value || "" };
+}
+
+async function parseDocxUpload(input, filename, options = {}) {
+  const persistId = options.persistImagesForExam || "";
+  if (options.html || options.rawText) {
+    let htmlText = options.html ? htmlToParseText(options.html) : "";
+    if (persistId && htmlText) htmlText = await persistInlineImagesInText(persistId, htmlText);
+    return pickRicherParse([
+      htmlText ? parseQuestionsFromText(htmlText) : null,
+      options.rawText ? parseQuestionsFromText(options.rawText) : null,
+    ]);
+  }
+  const buffer = asUploadBuffer(input);
+  if (!buffer.length) throw new Error("파일이 비어 있습니다.");
+  const parts = await mammothDocxParts(buffer, persistId);
+  let htmlText = htmlToParseText(parts.html);
+  if (persistId) htmlText = await persistInlineImagesInText(persistId, htmlText);
+  const xmlText = docxXmlToText(readZipFile(buffer, "word/document.xml"));
+  return pickRicherParse([
+    parseQuestionsFromText(htmlText),
+    parseQuestionsFromText(parts.raw),
+    xmlText ? parseQuestionsFromText(xmlText) : null,
+  ]);
 }
 
 function publicExam(exam) {
@@ -603,6 +734,17 @@ app.use("/api", (req, res, next) => {
   Promise.resolve(boot)
     .catch(() => {})
     .finally(() => next());
+});
+app.use("/api", (req, res, next) => {
+  const type = String(req.headers["content-type"] || "");
+  const isJson = type.includes("application/json");
+  if (req.method === "POST" && /\/import-(docx|pdf)$/.test(req.path) && !isJson) {
+    return express.raw({ type: () => true, limit: "50mb" })(req, res, next);
+  }
+  if (req.method === "POST" && /\/exams\/[^/]+\/media$/.test(req.path) && !isJson) {
+    return express.raw({ type: () => true, limit: "12mb" })(req, res, next);
+  }
+  next();
 });
 app.use("/api", express.json({ limit: "50mb" }));
 
@@ -1104,7 +1246,11 @@ app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res
 
 app.post("/api/admin/exams/:id/import-pdf", auth, adminOnly, async (req, res) => {
   try {
-    const text = await extractTextFromUpload(req.body.pdf, req.body.filename || "questions.pdf");
+    const filename = decodeURIComponent(
+      String((req.headers["x-filename"] || (req.body && req.body.filename) || "questions.pdf")).replace(/"/g, "")
+    );
+    const payload = Buffer.isBuffer(req.body) ? req.body : req.body && req.body.pdf;
+    const text = await extractTextFromUpload(payload, filename);
     const result = parseQuestionsFromText(text);
     await persistParsedQuestions(req.params.id, result.questions);
     if (!result.questions.length) {
@@ -1126,10 +1272,16 @@ app.post("/api/admin/exams/:id/import-pdf", auth, adminOnly, async (req, res) =>
 
 app.post("/api/admin/exams/:id/import-docx", auth, adminOnly, async (req, res) => {
   try {
-    const text = await extractTextFromUpload(req.body.docx, req.body.filename || "questions.docx", {
-      persistImagesForExam: req.params.id,
-    });
-    const result = parseQuestionsFromText(text);
+    const filename = decodeURIComponent(
+      String((req.headers["x-filename"] || (req.body && req.body.filename) || "questions.docx")).replace(/"/g, "")
+    );
+    const result = Buffer.isBuffer(req.body)
+      ? await parseDocxUpload(req.body, filename, { persistImagesForExam: req.params.id })
+      : await parseDocxUpload(req.body && req.body.docx, filename, {
+          persistImagesForExam: req.params.id,
+          html: req.body && req.body.html,
+          rawText: req.body && (req.body.rawText || req.body.text),
+        });
     await persistParsedQuestions(req.params.id, result.questions);
     if (!result.questions.length) {
       return res.status(400).json({
@@ -1145,6 +1297,22 @@ app.post("/api/admin/exams/:id/import-docx", auth, adminOnly, async (req, res) =
     });
   } catch (err) {
     res.status(400).json({ error: err.message || "Word 파일을 읽지 못했습니다. .doc 이 아니라 .docx로 저장해 주세요." });
+  }
+});
+
+app.post("/api/admin/exams/:id/media", auth, adminOnly, async (req, res) => {
+  try {
+    const buf = Buffer.isBuffer(req.body)
+      ? req.body
+      : decodeUploadBuffer((req.body && (req.body.image || req.body.dataUrl)) || "");
+    if (!buf.length) return res.status(400).json({ error: "이미지가 비어 있습니다." });
+    const mime = String(req.headers["content-type"] || (req.body && req.body.mime) || "image/png").split(";")[0].trim();
+    const safeMime = /^image\/(png|jpe?g|gif|webp|svg\+xml)$/i.test(mime) ? mime : "image/png";
+    const url = await saveDataUriImage(req.params.id, `data:${safeMime};base64,${buf.toString("base64")}`);
+    if (!url) return res.status(400).json({ error: "이미지를 저장하지 못했습니다." });
+    res.json({ url });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "이미지를 저장하지 못했습니다." });
   }
 });
 
@@ -1393,6 +1561,19 @@ app.delete("/api/admin/users/:id", auth, adminOnly, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message || "회원을 삭제하지 못했습니다." });
   }
+});
+
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  if (err.type === "entity.too.large" || err.status === 413) {
+    return res.status(413).json({ error: "파일이 너무 큽니다. 문항 파일만 올리거나 이미지 용량을 줄여 주세요." });
+  }
+  if (err instanceof SyntaxError && "body" in err) {
+    return res.status(400).json({ error: "요청 형식이 올바르지 않습니다." });
+  }
+  console.error(err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err.message || "서버 오류가 발생했습니다." });
 });
 
 if (process.argv.includes("--sync-media")) {

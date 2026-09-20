@@ -13,7 +13,12 @@ window.Api = {
     Storage.clearSession();
   },
   async request(url, options = {}) {
-    const headers = { "Content-Type": "application/json; charset=utf-8", ...(options.headers || {}) };
+    const headers = { ...(options.headers || {}) };
+    const body = options.body;
+    const binary = typeof Blob !== "undefined" && (body instanceof Blob || (typeof File !== "undefined" && body instanceof File));
+    if (!binary && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json; charset=utf-8";
+    }
     if (this.token()) headers.Authorization = `Bearer ${this.token()}`;
     let res;
     try {
@@ -23,7 +28,11 @@ window.Api = {
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || "요청에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      if (res.status === 413) throw new Error("파일이 너무 큽니다. 문항 파일만 올리거나 이미지 용량을 줄여 주세요.");
+      if (res.status === 502 || res.status === 504) {
+        throw new Error("파일 분석 시간이 초과되었습니다. 파일이 크면 문항 페이지만 올려 주세요.");
+      }
+      throw new Error(data.error || `요청에 실패했습니다. (${res.status})`);
     }
     return data;
   },
@@ -107,10 +116,41 @@ window.Api = {
       body: JSON.stringify({ pdf, filename }),
     });
   },
+  importPdfFile(id, file) {
+    return this.request(`/api/admin/exams/${encodeURIComponent(id)}/import-pdf`, {
+      method: "POST",
+      headers: { "X-Filename": encodeURIComponent(file && file.name ? file.name : "questions.pdf") },
+      body: file,
+    });
+  },
   importDocx(id, docx, filename) {
     return this.request(`/api/admin/exams/${encodeURIComponent(id)}/import-docx`, {
       method: "POST",
       body: JSON.stringify({ docx, filename }),
+    });
+  },
+  importDocxFile(id, file) {
+    return this.request(`/api/admin/exams/${encodeURIComponent(id)}/import-docx`, {
+      method: "POST",
+      headers: { "X-Filename": encodeURIComponent(file && file.name ? file.name : "questions.docx") },
+      body: file,
+    });
+  },
+  importDocxParsed(id, payload) {
+    return this.request(`/api/admin/exams/${encodeURIComponent(id)}/import-docx`, {
+      method: "POST",
+      body: JSON.stringify({
+        filename: payload && payload.filename,
+        html: payload && payload.html,
+        rawText: payload && payload.rawText,
+      }),
+    });
+  },
+  uploadExamMedia(id, blob, mime) {
+    return this.request(`/api/admin/exams/${encodeURIComponent(id)}/media`, {
+      method: "POST",
+      headers: { "Content-Type": mime || (blob && blob.type) || "application/octet-stream" },
+      body: blob,
     });
   },
   importAnswers(id, file, filename, questions) {
