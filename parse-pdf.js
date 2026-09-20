@@ -506,6 +506,21 @@ function splitAnswerAndExplain(value) {
   return { body: src, explain: "" };
 }
 
+function collectChoiceIndexes(value) {
+  const src = String(value || "");
+  const found = [];
+  const seen = new Set();
+  const re = new RegExp(`(?:${CHOICE_TOKEN})|[가나다라마ㄱㄴㄷㄹㅁA-Ea-e]|[1-5]\\s*번|[1-5]`, "g");
+  let match;
+  while ((match = re.exec(src))) {
+    const index = tokenToChoiceIndex(match[0]);
+    if (index == null || seen.has(index)) continue;
+    seen.add(index);
+    found.push(index);
+  }
+  return found;
+}
+
 function interpretAnswerValue(value) {
   const cleaned = String(value || "")
     .replace(/^(?:정답\s*[:：]?)?\s*/, "")
@@ -513,14 +528,19 @@ function interpretAnswerValue(value) {
     .trim()
     .replace(/[.,;]+$/, "");
   if (!cleaned) return null;
+  const indexes = collectChoiceIndexes(cleaned);
+  const rest = cleaned.replace(new RegExp(`(?:${CHOICE_TOKEN})|[가나다라마ㄱㄴㄷㄹㅁA-Ea-e]|[1-5]\\s*번|[1-5]|[,，、\\s;/와과및~∼\\-]`, "g"), "");
+  if (indexes.length && !rest) {
+    return { kind: "mcq", index: indexes[0], indexes, text: cleaned, raw: cleaned };
+  }
   const direct = tokenToChoiceIndex(cleaned);
   if (direct != null) {
-    return { kind: "mcq", index: direct, text: cleaned, raw: cleaned };
+    return { kind: "mcq", index: direct, indexes: [direct], text: cleaned, raw: cleaned };
   }
   const lead = cleaned.match(new RegExp(`^(${CHOICE_TOKEN}|${LETTER_TOKEN}|[1-5]\\s*번)\\b`));
   if (lead) {
     const index = tokenToChoiceIndex(lead[1]);
-    if (index != null) return { kind: "mcq", index, text: lead[1], raw: cleaned };
+    if (index != null) return { kind: "mcq", index, indexes: indexes.length ? indexes : [index], text: lead[1], raw: cleaned };
   }
   return { kind: "short", text: cleaned, raw: cleaned };
 }
@@ -566,6 +586,11 @@ function parseAnswerKeyFromText(raw) {
       }
       if (pairs.length === 1) {
         const leftover = trimmed.replace(pairRe, " ").replace(/\s+/g, " ").trim();
+        const extra = collectChoiceIndexes(leftover);
+        if (extra.length) {
+          push(pairs[0][1], `${pairs[0][2]} ${leftover}`.trim());
+          return;
+        }
         if (!leftover || leftover.length < 8) {
           push(pairs[0][1], pairs[0][2]);
           return;
@@ -625,12 +650,15 @@ function applyKeyToQuestion(question, key) {
     return true;
   }
   const choices = question.choices || [];
-  let index = key.kind === "mcq" ? key.index : null;
-  if (index == null || index < 0 || index >= choices.length) {
-    index = choiceIndexFromText(choices, key.text || key.raw || "");
+  let indexes = Array.isArray(key.indexes) ? key.indexes.slice() : [];
+  if (!indexes.length && key.kind === "mcq" && key.index != null) indexes = [key.index];
+  indexes = indexes.filter((index) => Number.isInteger(index) && index >= 0 && index < choices.length);
+  if (!indexes.length) {
+    const fallback = choiceIndexFromText(choices, key.text || key.raw || "");
+    if (fallback >= 0) indexes = [fallback];
   }
-  if (index == null || index < 0 || index >= choices.length) return false;
-  question.answer = index;
+  if (!indexes.length) return false;
+  question.answer = indexes.length === 1 ? indexes[0] : indexes;
   question.answerMatched = true;
   return true;
 }

@@ -1893,6 +1893,17 @@ button {
   margin: 4px 0 8px;
 }
 
+.answer-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 6px 0 4px;
+}
+
+.answer-checks .check-row {
+  margin: 0;
+}
+
 .badge.lock {
   background: #fff4e8;
   color: var(--orange);

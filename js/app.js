@@ -591,11 +591,9 @@ function noteAnswerHtml(item) {
     const selected = item.selected == null || item.selected === "" ? "(없음)" : String(item.selected);
     return `<p class="explain"><strong>제출</strong> ${escapeHtml(selected)}<br><strong>정답</strong> ${escapeHtml(String(item.answer || ""))}</p>`;
   }
-  const selected =
-    item.selected == null || item.selected === ""
-      ? "(없음)"
-      : `${Number(item.selected) + 1}번 · ${escapeHtml((item.choices && item.choices[item.selected]) || "")}`;
-  return `<p class="explain"><strong>제출</strong> ${selected}<br><strong>정답</strong> ${item.answer + 1}번 · ${escapeHtml((item.choices && item.choices[item.answer]) || "")}</p>`;
+  const selectedText = formatMcqAnswerText(item, selectedMcqIndexes(item.selected)) || "(없음)";
+  const answerText = formatMcqAnswerText(item) || "(없음)";
+  return `<p class="explain"><strong>제출</strong> ${escapeHtml(selectedText)}<br><strong>정답</strong> ${escapeHtml(answerText)}</p>`;
 }
 
 function notesWithExplain(notes) {
@@ -766,10 +764,7 @@ function examSectionName(session, item) {
 }
 
 function examAnsweredCount(session) {
-  return session.questions.filter((item) => {
-    const value = session.answers[item.no];
-    return value !== undefined && value !== null && String(value).trim() !== "";
-  }).length;
+  return session.questions.filter((item) => hasQuestionResponse(session.answers[item.no])).length;
 }
 
 function captureExamScroll() {
@@ -817,13 +812,23 @@ function updateExamProgress(session) {
 }
 
 function setExamMcq(session, no, choiceIdx) {
-  session.answers[no] = choiceIdx;
+  const question = session.questions.find((item) => item.no === no);
+  const multi = Boolean(question && question.multi);
+  if (multi) {
+    const current = selectedMcqIndexes(session.answers[no]);
+    const next = current.includes(choiceIdx) ? current.filter((idx) => idx !== choiceIdx) : [...current, choiceIdx].sort((a, b) => a - b);
+    if (next.length) session.answers[no] = next;
+    else delete session.answers[no];
+  } else {
+    session.answers[no] = choiceIdx;
+  }
   Storage.saveSession(session);
+  const picked = new Set(selectedMcqIndexes(session.answers[no]));
   document.querySelectorAll(`.cbt-item[data-no="${no}"] [data-choice]`).forEach((btn) => {
-    btn.classList.toggle("selected", Number(btn.dataset.choice) === choiceIdx);
+    btn.classList.toggle("selected", picked.has(Number(btn.dataset.choice)));
   });
   document.querySelectorAll(`.omr-dot[data-omr-q="${no}"]`).forEach((btn) => {
-    btn.classList.toggle("on", Number(btn.dataset.omrIdx) === choiceIdx);
+    btn.classList.toggle("on", picked.has(Number(btn.dataset.omrIdx)));
   });
   updateExamProgress(session);
 }
@@ -857,7 +862,7 @@ function renderQuestionItem(session, item, idx) {
   return `
     <article class="cbt-item ${current ? "current" : ""} ${marked ? "marked" : ""}" id="q-${item.no}" data-no="${item.no}" data-idx="${idx}">
       <div class="cbt-q-head">
-        <span class="cbt-q-no"><span class="cbt-q-num">${item.no}</span>${short ? `<span class="cbt-q-kind">주관식</span>` : ""}</span>
+        <span class="cbt-q-no"><span class="cbt-q-num">${item.no}</span>${short ? `<span class="cbt-q-kind">주관식</span>` : item.multi ? `<span class="cbt-q-kind">복수 정답</span>` : ""}</span>
       </div>
       <h2 class="cbt-stem">${escapeHtml(item.q)}</h2>
       ${questionImagesHtml(item.images)}
@@ -870,7 +875,7 @@ function renderQuestionItem(session, item, idx) {
           : `<div class="cbt-choices">
         ${(item.choices || [])
           .map((choice, choiceIdx) => {
-            const on = selected === choiceIdx;
+            const on = selectedMcqIndexes(selected).includes(choiceIdx);
             return `
               <button class="cbt-choice ${on ? "selected" : ""}" data-q="${item.no}" data-choice="${choiceIdx}">
                 <span class="cbt-mark">${(item.choiceLabels && item.choiceLabels[choiceIdx]) || CIRCLES[choiceIdx] || choiceIdx + 1}</span>
@@ -997,7 +1002,7 @@ function renderExam() {
                         : `<div class="omr-bubbles">
                       ${Array.from({ length: bubbleCount }, (_, choiceIdx) => {
                         const enabled = choiceIdx < (item.choices || []).length;
-                        return `<button class="omr-dot ${selected === choiceIdx ? "on" : ""}" data-omr-q="${item.no}" data-omr-idx="${choiceIdx}" data-omr-i="${idx}" ${enabled ? "" : "disabled"} title="${item.no}번 ${choiceIdx + 1}">${choiceIdx + 1}</button>`;
+                        return `<button class="omr-dot ${selectedMcqIndexes(selected).includes(choiceIdx) ? "on" : ""}" data-omr-q="${item.no}" data-omr-idx="${choiceIdx}" data-omr-i="${idx}" ${enabled ? "" : "disabled"} title="${item.no}번 ${choiceIdx + 1}">${choiceIdx + 1}</button>`;
                       }).join("")}
                     </div>`
                     }
@@ -1025,7 +1030,7 @@ function renderExam() {
             <div class="all-grid">
               ${session.questions
                 .map((item, idx) => {
-                  const answered = session.answers[item.no] !== undefined && String(session.answers[item.no]).trim() !== "";
+                  const answered = hasQuestionResponse(session.answers[item.no]);
                   const current = idx === session.index;
                   const marked = session.marked[item.no];
                   return `<button class="all-btn ${answered ? "answered" : ""} ${current ? "current" : ""} ${marked ? "marked" : ""}" data-go="${idx}">${item.no}</button>`;
@@ -1130,10 +1135,7 @@ function renderExam() {
     }
   });
   document.querySelector("[data-submit]").addEventListener("click", () => {
-    const unanswered = session.questions.filter((item) => {
-      const value = session.answers[item.no];
-      return value === undefined || value === null || String(value).trim() === "";
-    }).length;
+    const unanswered = session.questions.filter((item) => !hasQuestionResponse(session.answers[item.no])).length;
     const ok = unanswered
       ? confirm(`아직 ${unanswered}문항이 비어 있습니다. 제출할까요?`)
       : confirm("시험을 제출할까요?");
@@ -1217,10 +1219,12 @@ function renderResult() {
                 : `<div class="choices">
               ${(item.choices || [])
                 .map((choice, idx) => {
+                  const answers = new Set(mcqAnswerIndexes(item));
+                  const picked = new Set(selectedMcqIndexes(item.selected));
                   const cls = [
-                    idx === item.answer ? "correct" : "",
-                    idx === item.selected && !item.ok ? "wrong" : "",
-                    idx === item.selected ? "selected" : "",
+                    answers.has(idx) ? "correct" : "",
+                    picked.has(idx) && !item.ok ? "wrong" : "",
+                    picked.has(idx) ? "selected" : "",
                   ]
                     .filter(Boolean)
                     .join(" ");

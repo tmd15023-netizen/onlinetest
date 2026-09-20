@@ -12,7 +12,7 @@ const {
   applyExplainsToQuestions,
   htmlToParseText,
 } = require("./parse-pdf.js");
-const { isShortQuestion, gradeQuestion } = require("./js/question.js");
+const { isShortQuestion, gradeQuestion, normalizeMcqAnswer, isMultiMcq } = require("./js/question.js");
 const { sanitizeNoticeHtml, noticePlainText } = require("./js/notice-format.js");
 const dbx = require("./db.js");
 
@@ -481,6 +481,7 @@ function clientQuestion(item, index, exam) {
     images: sanitizeImages(item.images),
     choiceImages: Array.isArray(item.choiceImages) ? item.choiceImages.map(sanitizeImages) : [],
     choiceLabels: Array.isArray(item.choiceLabels) ? item.choiceLabels.map((label) => String(label || "")).filter(Boolean) : [],
+    multi: isMultiMcq(item),
   };
 }
 
@@ -983,8 +984,12 @@ app.post("/api/admin/exams", auth, adminOnly, async (req, res) => {
     password: req.body.password ? hash(req.body.password) : "",
     questions: [],
   };
-  await writeExam(exam);
-  res.json(publicExam(exam));
+  try {
+    await writeExam(exam);
+    res.json(publicExam(exam));
+  } catch (err) {
+    res.status(500).json({ error: err.message || "시험을 저장하지 못했습니다." });
+  }
 });
 
 app.put("/api/admin/exams/:id", auth, adminOnly, async (req, res) => {
@@ -1033,8 +1038,8 @@ app.post("/api/admin/exams/:id/questions", auth, adminOnly, async (req, res) => 
     exam.questions.push({ q, type: "short", choices: [], answer, explain, section });
   } else {
     const choices = Array.isArray(req.body.choices) ? req.body.choices.map((item) => String(item || "").trim()) : [];
-    const answer = Number(req.body.answer);
-    if (choices.length < 2 || choices.some((item) => !item) || Number.isNaN(answer)) {
+    const answer = normalizeMcqAnswer(req.body.answer, choices.length);
+    if (choices.length < 2 || choices.some((item) => !item) || answer == null) {
       return res.status(400).json({ error: "문제, 보기, 정답을 모두 입력해 주세요." });
     }
     exam.questions.push({ q, type: "mcq", choices, answer, explain, section });
@@ -1073,8 +1078,8 @@ app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res
     const choices = Array.isArray(item.choices)
       ? item.choices.map((choice) => String(choice || "").trim()).filter(Boolean)
       : [];
-    const answer = Number(item.answer);
-    if (choices.length < 2 || Number.isNaN(answer)) continue;
+    const answer = normalizeMcqAnswer(item.answer, choices.length);
+    if (choices.length < 2 || answer == null) continue;
     const media = await persistQuestionMedia(exam.id, item);
     exam.questions.push({
       q,

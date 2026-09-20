@@ -96,6 +96,17 @@ function examGradeClass(category) {
   return "grade-other";
 }
 
+function formField(form, name) {
+  const el = form.elements.namedItem(name);
+  if (!el) return "";
+  return String(el.value || "");
+}
+
+function formChecked(form, name) {
+  const el = form.elements.namedItem(name);
+  return Boolean(el && el.checked);
+}
+
 function setBanner(el, message, ok) {
   if (!el) return;
   el.textContent = message;
@@ -138,6 +149,29 @@ function ensurePreviewEditing() {
   return window._pdfEditing;
 }
 
+function mcqAnswerChecksHtml(item, index, count) {
+  const picked = new Set(mcqAnswerIndexes(item));
+  const n = count || Math.max(2, (item.choices || []).length || 4);
+  return `
+    <div class="answer-checks">
+      ${Array.from({ length: n }, (_, cidx) => `
+        <label class="check-row">
+          <input type="checkbox" data-pdf-answer-idx="${cidx}" value="${cidx}" ${picked.has(cidx) ? "checked" : ""} />
+          ${cidx + 1}번
+        </label>
+      `).join("")}
+    </div>
+    <p class="exam-desc">여러 개를 고르면 복수 정답 문항이 됩니다.</p>
+  `;
+}
+
+function readMcqAnswerFrom(root, item) {
+  const boxes = [...(root || document).querySelectorAll("[data-pdf-answer-idx]")];
+  if (!boxes.length) return item.answer;
+  const picked = boxes.filter((el) => el.checked).map((el) => Number(el.value));
+  return normalizeMcqAnswer(picked, (item.choices || boxes).length) ?? picked;
+}
+
 function previewChoiceCount(item) {
   const n = Array.isArray(item.choices) ? item.choices.length : 0;
   return Math.max(4, Math.min(5, n || 4));
@@ -154,8 +188,8 @@ function readPreviewItemFromDom(item, index) {
       const input = document.querySelector(`[data-pdf-answer-text="${index}"]`);
       return { ...item, type: "short", answer: input ? input.value.trim() : item.answer, explain: readExplain(document) };
     }
-    const select = document.querySelector(`[data-pdf-answer="${index}"]`);
-    return { ...item, type: "mcq", answer: select ? Number(select.value) : item.answer, explain: readExplain(document) };
+    const rootDoc = document.querySelector(`[data-preview-idx="${index}"]`) || document;
+    return { ...item, type: "mcq", answer: readMcqAnswerFrom(rootDoc, item), explain: readExplain(document) };
   }
   const typeEl = root.querySelector("[data-pdf-type]");
   const qEl = root.querySelector("[data-pdf-q]");
@@ -164,8 +198,7 @@ function readPreviewItemFromDom(item, index) {
       const input = root.querySelector(`[data-pdf-answer-text="${index}"]`);
       return { ...item, type: "short", answer: input ? input.value.trim() : item.answer, explain: readExplain(root) };
     }
-    const select = root.querySelector(`[data-pdf-answer="${index}"]`);
-    return { ...item, type: "mcq", answer: select ? Number(select.value) : item.answer, explain: readExplain(root) };
+    return { ...item, type: "mcq", answer: readMcqAnswerFrom(root, item), explain: readExplain(root) };
   }
   const type = typeEl ? typeEl.value : isShortQuestion(item) ? "short" : "mcq";
   const explainEl = root.querySelector(`[data-pdf-explain="${index}"]`) || root.querySelector("[data-pdf-explain]");
@@ -188,10 +221,8 @@ function readPreviewItemFromDom(item, index) {
       (choice, idx, arr) => choice || idx < 4 || arr.slice(0, idx).some(Boolean)
     );
     if (next.choices.length < 2) next.choices = item.choices && item.choices.length >= 2 ? item.choices : ["", ""];
-    const select = root.querySelector(`[data-pdf-answer="${index}"]`);
-    next.answer = select ? Number(select.value) : Number(item.answer) || 0;
-    if (!Number.isFinite(next.answer) || next.answer < 0) next.answer = 0;
-    if (next.answer >= next.choices.length) next.answer = 0;
+    next.answer = readMcqAnswerFrom(root, next);
+    next.answerMatched = mcqAnswerIndexes({ answer: next.answer }).length > 0;
   }
   return next;
 }
@@ -241,14 +272,7 @@ function previewItemViewHtml(item, index, marks) {
         .join("")}
     </ol>
     <label>정답
-      <select data-pdf-answer="${index}">
-        ${(item.choices || [])
-          .map(
-            (_, cidx) =>
-              `<option value="${cidx}" ${Number(item.answer) === cidx ? "selected" : ""}>${cidx + 1}번</option>`
-          )
-          .join("")}
-      </select>
+      ${mcqAnswerChecksHtml(item, index, (item.choices || []).length)}
     </label>`
     }
     <label>해설 <textarea data-pdf-explain="${index}" rows="2" placeholder="채점 후 오답 노트에 표시됩니다">${escapeHtml(item.explain || "")}</textarea></label>
@@ -282,9 +306,7 @@ function previewItemEditHtml(item, index, marks) {
               return `<label>보기 ${label} <input data-pdf-choice="${cidx}" value="${escapeHtml((item.choices && item.choices[cidx]) || "")}" /></label>`;
             }).join("")}
       <label>정답
-        <select data-pdf-answer="${index}">
-          ${Array.from({ length: count }, (_, cidx) => `<option value="${cidx}" ${Number(item.answer) === cidx ? "selected" : ""}>${cidx + 1}번</option>`).join("")}
-        </select>
+        ${mcqAnswerChecksHtml(item, index, count)}
       </label>`
       }
       <label>해설 <textarea data-pdf-explain="${index}" rows="3" placeholder="채점 후 오답 노트에 표시됩니다">${escapeHtml(item.explain || "")}</textarea></label>
@@ -360,7 +382,7 @@ function showQuestionPreview(id, questions, bannerMessage, ok, options = {}) {
         item._mcqAnswer = savedAnswer;
       } else if (!(item.choices && item.choices.length >= 2)) {
         item.choices = prev._mcqChoices && prev._mcqChoices.length >= 2 ? prev._mcqChoices : ["", "", "", ""];
-        item.answer = Number.isFinite(Number(prev._mcqAnswer)) ? prev._mcqAnswer : 0;
+        item.answer = prev._mcqAnswer != null ? prev._mcqAnswer : 0;
       }
       refreshItem(index);
     });
@@ -589,12 +611,12 @@ async function renderAdminExams() {
     const form = e.currentTarget;
     try {
       await Api.createExam({
-        title: form.title.value,
-        desc: form.desc.value,
-        minutes: form.minutes.value,
-        password: form.password.value,
+        title: formField(form, "title"),
+        desc: formField(form, "desc"),
+        minutes: formField(form, "minutes"),
+        password: formField(form, "password"),
         tag: "시험",
-        category: form.category.value,
+        category: formField(form, "category"),
       });
       renderAdminExams();
     } catch (err) {
@@ -704,14 +726,15 @@ async function renderAdminExam(id) {
             <div class="field"><label>보기 4</label><input name="c4" required /></div>
             <div class="field"><label>보기 5 (선택)</label><input name="c5" /></div>
             <div class="field">
-              <label>정답</label>
-              <select name="answer">
-                <option value="0">1번</option>
-                <option value="1">2번</option>
-                <option value="2">3번</option>
-                <option value="3">4번</option>
-                <option value="4">5번</option>
-              </select>
+              <label>정답 (여러 개 선택 가능)</label>
+              <div class="answer-checks">
+                <label class="check-row"><input type="checkbox" data-mcq-answer value="0" /> 1번</label>
+                <label class="check-row"><input type="checkbox" data-mcq-answer value="1" /> 2번</label>
+                <label class="check-row"><input type="checkbox" data-mcq-answer value="2" /> 3번</label>
+                <label class="check-row"><input type="checkbox" data-mcq-answer value="3" /> 4번</label>
+                <label class="check-row"><input type="checkbox" data-mcq-answer value="4" /> 5번</label>
+              </div>
+              <p class="exam-desc">정답을 2개 이상 고르면 응시자도 복수로 선택합니다. 모두 맞혀야 정답입니다.</p>
             </div>
           </div>
           <div class="q-short" hidden>
@@ -731,7 +754,7 @@ async function renderAdminExam(id) {
             <div class="review-item">
               <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
                 <span class="q-no">${index + 1}번</span>
-                ${isShortQuestion(item) ? `<span class="badge">주관식</span>` : `<span class="badge">객관식</span>`}
+                ${isShortQuestion(item) ? `<span class="badge">주관식</span>` : `<span class="badge">${isMultiMcq(item) ? "객관식 · 복수" : "객관식"}</span>`}
                 <button class="btn btn-danger pdf-del" data-del-q="${index}" type="button" style="margin-left:auto">삭제</button>
               </div>
               <h3 style="font-size:15px">${escapeHtml(item.q)}</h3>
@@ -739,7 +762,7 @@ async function renderAdminExam(id) {
               <p class="exam-desc">${
                 isShortQuestion(item)
                   ? `정답 ${escapeHtml(String(item.answer || ""))}`
-                  : `정답 ${item.answer + 1}번 · ${escapeHtml(item.choices[item.answer] || "")}`
+                  : `정답 ${escapeHtml(formatMcqAnswerText(item))}${isMultiMcq(item) ? " · 복수" : ""}`
               }</p>
               ${item.explain ? `<div class="note-explain"><strong>해설</strong><p>${escapeHtml(item.explain)}</p></div>` : ""}
             </div>
@@ -758,14 +781,14 @@ async function renderAdminExam(id) {
     const form = e.currentTarget;
     const banner = document.getElementById("meta-banner");
     const body = {
-      title: form.title.value,
-      desc: form.desc.value,
-      minutes: form.minutes.value,
-      category: form.category.value,
-      tag: form.tag.value,
+      title: formField(form, "title"),
+      desc: formField(form, "desc"),
+      minutes: formField(form, "minutes"),
+      category: formField(form, "category"),
+      tag: formField(form, "tag"),
     };
-    if (form.clearPassword.checked) body.password = "";
-    else if (form.password.value) body.password = form.password.value;
+    if (formChecked(form, "clearPassword")) body.password = "";
+    else if (formField(form, "password")) body.password = formField(form, "password");
     try {
       await Api.updateExam(id, body);
       setBanner(banner, "저장했습니다.", true);
@@ -829,7 +852,7 @@ async function renderAdminExam(id) {
           q: form.q.value,
           type: "mcq",
           choices: [form.c1.value, form.c2.value, form.c3.value, form.c4.value, form.c5.value].filter(Boolean),
-          answer: Number(form.answer.value),
+          answer: [...form.querySelectorAll("[data-mcq-answer]:checked")].map((el) => Number(el.value)),
           explain: form.explain.value,
         });
       }
