@@ -113,6 +113,117 @@ function setBanner(el, message, ok) {
   el.className = ok ? "form-banner ok" : "form-banner err";
 }
 
+function questionImageEditorHtml(images) {
+  const list = (images || []).filter(Boolean);
+  return `
+    <div class="q-image-edit">
+      ${list
+        .map(
+          (src, i) => `
+        <div class="q-image-chip">
+          <img src="${safeImageSrc(src)}" alt="문항 이미지" />
+          <button type="button" class="btn btn-ghost" data-remove-img="${i}">삭제</button>
+        </div>
+      `
+        )
+        .join("")}
+      <label class="q-image-add">
+        이미지 첨부
+        <input type="file" accept="image/*" multiple hidden data-add-img />
+      </label>
+    </div>
+  `;
+}
+
+function bindQuestionImages(root, images, onChange) {
+  if (!root) return;
+  const box = root.querySelector(".q-image-edit");
+  if (!box) return;
+  const current = () => (Array.isArray(images) ? images : []);
+  const redraw = (next) => {
+    images = next;
+    box.outerHTML = questionImageEditorHtml(next);
+    bindQuestionImages(root, next, onChange);
+    if (typeof onChange === "function") onChange(next);
+  };
+  box.querySelector("[data-add-img]")?.addEventListener("change", async (e) => {
+    const files = [...(e.currentTarget.files || [])];
+    e.currentTarget.value = "";
+    const next = current().slice();
+    for (const file of files) {
+      if (!String(file.type || "").startsWith("image/")) continue;
+      if (file.size > 2.5 * 1024 * 1024) {
+        alert("이미지는 장당 2.5MB 이하로 올려 주세요.");
+        continue;
+      }
+      if (next.length >= 8) {
+        alert("문항 이미지는 최대 8장까지 첨부할 수 있습니다.");
+        break;
+      }
+      next.push(await readFileAsDataUrl(file));
+    }
+    redraw(next);
+  });
+  box.querySelectorAll("[data-remove-img]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.removeImg);
+      redraw(current().filter((_, i) => i !== idx));
+    });
+  });
+}
+
+function registeredQuestionEditHtml(item, index) {
+  const short = isShortQuestion(item);
+  const choices = item.choices && item.choices.length ? item.choices.concat(["", "", "", "", ""]).slice(0, 5) : ["", "", "", "", ""];
+  const picked = new Set(mcqAnswerIndexes(item));
+  return `
+    <div class="review-item editing" data-q-index="${index}" data-q-editor>
+      <div class="pdf-item-head">
+        <strong>${index + 1}번 수정</strong>
+        <button class="btn btn-primary pdf-del" type="button" data-save-q="${index}">저장</button>
+        <button class="btn btn-ghost pdf-del" type="button" data-cancel-q="${index}">취소</button>
+      </div>
+      <div class="pdf-edit">
+        <label>문항 유형
+          <select data-edit-type>
+            <option value="mcq" ${short ? "" : "selected"}>객관식</option>
+            <option value="short" ${short ? "selected" : ""}>주관식</option>
+          </select>
+        </label>
+        <label>문제
+          <textarea data-edit-stem rows="3">${escapeHtml(item.q || "")}</textarea>
+        </label>
+        <div class="field">
+          <label>문항 이미지</label>
+          ${questionImageEditorHtml(item.images)}
+        </div>
+        <div data-edit-short ${short ? "" : "hidden"}>
+          <label>주관식 정답 <input data-edit-answer-text value="${escapeHtml(String(item.answer || ""))}" placeholder="여러 정답은 쉼표로 구분" /></label>
+        </div>
+        <div data-edit-mcq ${short ? "hidden" : ""}>
+          ${choices
+            .map(
+              (choice, cidx) =>
+                `<label>보기 ${cidx + 1}${cidx === 4 ? " (선택)" : ""} <input data-edit-choice="${cidx}" value="${escapeHtml(choice)}" /></label>`
+            )
+            .join("")}
+          <label>정답 (여러 개 선택 가능)
+            <div class="answer-checks">
+              ${choices
+                .map(
+                  (_, cidx) =>
+                    `<label class="check-row"><input type="checkbox" data-edit-answer value="${cidx}" ${picked.has(cidx) ? "checked" : ""} /> ${cidx + 1}번</label>`
+                )
+                .join("")}
+            </div>
+          </label>
+        </div>
+        <label>해설 <textarea data-edit-explain rows="3">${escapeHtml(item.explain || "")}</textarea></label>
+      </div>
+    </div>
+  `;
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -636,7 +747,7 @@ async function renderAdminExams() {
   });
 }
 
-async function renderAdminExam(id) {
+async function renderAdminExam(id, options = {}) {
   let pack;
   try {
     pack = await Api.examQuestions(id);
@@ -742,6 +853,10 @@ async function renderAdminExam(id) {
             <p class="exam-desc">응시자는 답을 하나만 입력합니다. 정답지에 여러 형태를 쉼표(,)로 적어 두면, 그중 하나와 같으면 정답입니다. 띄어쓰기는 채점에서 무시됩니다.</p>
           </div>
           <div class="field"><label>해설</label><input name="explain" placeholder="채점 후 보여줄 설명" /></div>
+          <div class="field">
+            <label>문항 이미지</label>
+            ${questionImageEditorHtml([])}
+          </div>
           <button class="btn btn-primary" type="submit">문제 추가</button>
         </form>
       </section>
@@ -749,13 +864,16 @@ async function renderAdminExam(id) {
         ${
           pack.questions.length
             ? pack.questions
-                .map(
-                  (item, index) => `
-            <div class="review-item">
-              <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+                .map((item, index) =>
+                  options.editIndex === index
+                    ? registeredQuestionEditHtml(item, index)
+                    : `
+            <div class="review-item" data-q-index="${index}">
+              <div class="pdf-item-head">
                 <span class="q-no">${index + 1}번</span>
                 ${isShortQuestion(item) ? `<span class="badge">주관식</span>` : `<span class="badge">${isMultiMcq(item) ? "객관식 · 복수" : "객관식"}</span>`}
-                <button class="btn btn-danger pdf-del" data-del-q="${index}" type="button" style="margin-left:auto">삭제</button>
+                <button class="btn btn-ghost pdf-del" data-open-q="${index}" type="button">수정</button>
+                <button class="btn btn-danger pdf-del" data-del-q="${index}" type="button">삭제</button>
               </div>
               <h3 style="font-size:15px">${escapeHtml(item.q)}</h3>
               ${questionImagesHtml(item.images)}
@@ -835,7 +953,12 @@ async function renderAdminExam(id) {
   };
   document.getElementById("q-type")?.addEventListener("change", syncQType);
   syncQType();
-  document.getElementById("add-q").addEventListener("submit", async (e) => {
+  const addForm = document.getElementById("add-q");
+  let addImages = [];
+  bindQuestionImages(addForm, addImages, (next) => {
+    addImages = next;
+  });
+  addForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const type = document.getElementById("q-type").value;
@@ -846,6 +969,7 @@ async function renderAdminExam(id) {
           type: "short",
           answerText: form.answerText.value,
           explain: form.explain.value,
+          images: addImages,
         });
       } else {
         await Api.addQuestion(id, {
@@ -854,6 +978,7 @@ async function renderAdminExam(id) {
           choices: [form.c1.value, form.c2.value, form.c3.value, form.c4.value, form.c5.value].filter(Boolean),
           answer: [...form.querySelectorAll("[data-mcq-answer]:checked")].map((el) => Number(el.value)),
           explain: form.explain.value,
+          images: addImages,
         });
       }
       renderAdminExam(id);
@@ -861,6 +986,51 @@ async function renderAdminExam(id) {
       alert(err.message);
     }
   });
+  document.querySelectorAll("[data-open-q]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const index = Number(btn.dataset.openQ);
+      renderAdminExam(id, { editIndex: index });
+    });
+  });
+  const editor = document.querySelector("[data-q-editor]");
+  if (editor) {
+    const index = Number(editor.dataset.qIndex);
+    let images = ((pack.questions[index] && pack.questions[index].images) || []).slice();
+    bindQuestionImages(editor, images, (next) => {
+      images = next;
+    });
+    editor.querySelector("[data-edit-type]")?.addEventListener("change", (e) => {
+      const short = e.currentTarget.value === "short";
+      const shortBox = editor.querySelector("[data-edit-short]");
+      const mcqBox = editor.querySelector("[data-edit-mcq]");
+      if (shortBox) shortBox.hidden = !short;
+      if (mcqBox) mcqBox.hidden = short;
+    });
+    editor.querySelector("[data-save-q]")?.addEventListener("click", async () => {
+      const type = editor.querySelector("[data-edit-type]").value;
+      const body = {
+        q: editor.querySelector("[data-edit-stem]").value,
+        type,
+        explain: editor.querySelector("[data-edit-explain]").value,
+        images,
+      };
+      if (type === "short") {
+        body.answerText = editor.querySelector("[data-edit-answer-text]").value;
+      } else {
+        body.choices = [...editor.querySelectorAll("[data-edit-choice]")].map((el) => el.value.trim()).filter(Boolean);
+        body.answer = [...editor.querySelectorAll("[data-edit-answer]:checked")].map((el) => Number(el.value));
+      }
+      try {
+        await Api.updateQuestion(id, index, body);
+        await renderAdminExam(id);
+        document.querySelector(`[data-q-index="${index}"]`)?.scrollIntoView({ block: "start" });
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    editor.querySelector("[data-cancel-q]")?.addEventListener("click", () => renderAdminExam(id));
+    editor.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
   document.querySelectorAll("[data-del-q]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const index = Number(btn.dataset.delQ);

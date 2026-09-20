@@ -89,6 +89,12 @@ window.Api = {
       body: JSON.stringify(body),
     });
   },
+  updateQuestion(id, index, body) {
+    return this.request(`/api/admin/exams/${encodeURIComponent(id)}/questions/${encodeURIComponent(index)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
   bulkQuestions(id, questions) {
     return this.request(`/api/admin/exams/${encodeURIComponent(id)}/questions/bulk`, {
       method: "POST",

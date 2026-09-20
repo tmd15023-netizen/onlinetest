@@ -1035,15 +1035,19 @@ app.post("/api/admin/exams/:id/questions", auth, adminOnly, async (req, res) => 
   if (type === "short") {
     const answer = String(req.body.answerText != null ? req.body.answerText : req.body.answer || "").trim();
     if (!answer) return res.status(400).json({ error: "주관식 정답을 입력해 주세요." });
-    exam.questions.push({ q, type: "short", choices: [], answer, explain, section });
+    exam.questions.push({ q, type: "short", choices: [], answer, explain, section, images: [] });
   } else {
     const choices = Array.isArray(req.body.choices) ? req.body.choices.map((item) => String(item || "").trim()) : [];
     const answer = normalizeMcqAnswer(req.body.answer, choices.length);
     if (choices.length < 2 || choices.some((item) => !item) || answer == null) {
       return res.status(400).json({ error: "문제, 보기, 정답을 모두 입력해 주세요." });
     }
-    exam.questions.push({ q, type: "mcq", choices, answer, explain, section });
+    exam.questions.push({ q, type: "mcq", choices, answer, explain, section, images: [] });
   }
+  const last = exam.questions[exam.questions.length - 1];
+  const media = await persistQuestionMedia(exam.id, { images: req.body.images, choiceImages: req.body.choiceImages });
+  last.images = media.images;
+  last.choiceImages = media.choiceImages;
   exam.questionCount = exam.questions.length;
   await writeExam(exam);
   res.json({ ok: true, questions: exam.questions });
@@ -1200,6 +1204,43 @@ app.post("/api/admin/exams/:id/import-explains", auth, adminOnly, async (req, re
   } catch (err) {
     res.status(400).json({ error: err.message || "해설 파일을 읽지 못했습니다." });
   }
+});
+
+app.put("/api/admin/exams/:id/questions/:index", auth, adminOnly, async (req, res) => {
+  const exam = await findExam(req.params.id);
+  if (!exam) return res.status(404).json({ error: "시험을 찾을 수 없습니다." });
+  const index = Number(req.params.index);
+  exam.questions = exam.questions || [];
+  const current = exam.questions[index];
+  if (!current) return res.status(404).json({ error: "문항을 찾을 수 없습니다." });
+  const q = String(req.body.q || "").trim();
+  const type = req.body.type === "short" ? "short" : "mcq";
+  const explain = String(req.body.explain != null ? req.body.explain : current.explain || "").trim();
+  const section = String(req.body.section != null ? req.body.section : current.section || "").trim();
+  if (!q) return res.status(400).json({ error: "문제를 입력해 주세요." });
+  let next;
+  if (type === "short") {
+    const answer = String(req.body.answerText != null ? req.body.answerText : req.body.answer || "").trim();
+    if (!answer) return res.status(400).json({ error: "주관식 정답을 입력해 주세요." });
+    next = { ...current, q, type: "short", choices: [], answer, explain, section, choiceImages: [] };
+  } else {
+    const choices = Array.isArray(req.body.choices) ? req.body.choices.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    const answer = normalizeMcqAnswer(req.body.answer, choices.length);
+    if (choices.length < 2 || answer == null) {
+      return res.status(400).json({ error: "문제, 보기, 정답을 모두 입력해 주세요." });
+    }
+    next = { ...current, q, type: "mcq", choices, answer, explain, section };
+  }
+  const media = await persistQuestionMedia(exam.id, {
+    images: req.body.images != null ? req.body.images : current.images,
+    choiceImages: req.body.choiceImages != null ? req.body.choiceImages : next.choiceImages,
+  });
+  next.images = media.images;
+  next.choiceImages = media.choiceImages;
+  exam.questions[index] = next;
+  exam.questionCount = exam.questions.length;
+  await writeExam(exam);
+  res.json({ ok: true, questions: exam.questions });
 });
 
 app.delete("/api/admin/exams/:id/questions/:index", auth, adminOnly, async (req, res) => {

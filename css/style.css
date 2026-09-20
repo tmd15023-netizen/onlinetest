@@ -1364,6 +1364,56 @@ button {
   max-height: 180px;
 }
 
+.q-image-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.q-image-chip {
+  position: relative;
+  width: 120px;
+}
+
+.q-image-chip img {
+  display: block;
+  width: 120px;
+  height: 80px;
+  object-fit: contain;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.q-image-chip .btn {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.q-image-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  height: 80px;
+  padding: 0 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: #f7f8fb;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-sub);
+  cursor: pointer;
+}
+
+.q-image-add:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 .cbt-choice-body {
   display: flex;
   flex-direction: column;
