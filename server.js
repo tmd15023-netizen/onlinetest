@@ -176,10 +176,42 @@ async function writeSettings(patch) {
 }
 
 async function listAllExams() {
+  await dbx.ensureMongo();
+  const local = loadDb().exams || [];
   if (dbx.mongoReady()) {
-    return dbx.ensureExams(loadDb().exams);
+    const remote = await dbx.ensureExams(local);
+    const byId = new Map();
+    local.forEach((exam) => {
+      if (exam && exam.id) byId.set(String(exam.id), exam);
+    });
+    (remote || []).forEach((exam) => {
+      if (exam && exam.id) byId.set(String(exam.id), exam);
+    });
+    return [...byId.values()];
   }
-  return loadDb().exams;
+  return local;
+}
+
+function examShell(id, fallback = {}) {
+  return {
+    id,
+    title: String(fallback.title || "시험").trim() || "시험",
+    desc: String(fallback.desc || "").trim(),
+    category: examGradeLabel(fallback.category),
+    minutes: Number(fallback.minutes) || 40,
+    tag: String(fallback.tag || "시험").trim() || "시험",
+    questionCount: 0,
+    seed: Date.now() % 100000,
+    password: "",
+    questions: [],
+  };
+}
+
+async function loadExamForWrite(id, fallback = {}) {
+  const exam = await findExam(id);
+  if (exam) return exam;
+  if (!safeExamId(id)) return null;
+  return examShell(id, fallback);
 }
 
 function noticeDateNow() {
@@ -235,11 +267,22 @@ async function removeNotice(id) {
 }
 
 async function findExam(id) {
+  const want = decodeURIComponent(String(id || "")).trim().split("/")[0];
+  if (!want) return null;
+  await dbx.ensureMongo();
   if (dbx.mongoReady()) {
-    const exam = await dbx.findExam(id);
+    const exam = await dbx.findExam(want);
     if (exam) return exam;
   }
-  return loadDb().exams.find((item) => item.id === id) || null;
+  const local = (loadDb().exams || []).find((item) => item.id === want) || null;
+  if (local && dbx.mongoReady()) {
+    try {
+      await dbx.upsertExam(local);
+    } catch (err) {
+      console.error("시험 Mongo 복구 실패:", err.message);
+    }
+  }
+  return local;
 }
 
 async function writeExam(exam) {
@@ -247,6 +290,7 @@ async function writeExam(exam) {
     await persistParsedQuestions(exam.id, exam.questions);
     exam.questionCount = exam.questions.length;
   }
+  await dbx.ensureMongo();
   if (dbx.mongoReady()) {
     const saved = await dbx.upsertExam(exam);
     const db = loadDb();
@@ -255,6 +299,9 @@ async function writeExam(exam) {
     else db.exams.push(exam);
     saveDb(db);
     return saved;
+  }
+  if (process.env.VERCEL) {
+    throw new Error("회원 DB에 연결하지 못했습니다. 잠시 후 다시 등록해 주세요.");
   }
   const db = loadDb();
   const index = db.exams.findIndex((item) => item.id === exam.id);
@@ -687,6 +734,14 @@ function adminOnly(req, res, next) {
 }
 
 const app = express();
+app.param("id", (req, res, next, value) => {
+  try {
+    req.params.id = decodeURIComponent(String(value || "")).trim().split("/")[0];
+  } catch (err) {
+    req.params.id = String(value || "").trim();
+  }
+  next();
+});
 const boot = dbx
   .connectMongo()
   .then(async (ok) => {
@@ -1165,13 +1220,71 @@ app.get("/api/admin/exams/:id/questions", auth, adminOnly, async (req, res) => {
   });
 });
 
+app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.questions) ? req.body.questions : [];
+    if (!items.length) return res.status(400).json({ error: "등록할 문항이 없습니다." });
+    const exam = await loadExamForWrite(req.params.id, req.body);
+    if (!exam) return res.status(404).json({ error: "시험을 찾을 수 없습니다." });
+    exam.questions = exam.questions || [];
+    if (req.body.replace) exam.questions = [];
+    for (const item of items) {
+      const q = String(item.q || "").trim();
+      if (!q) continue;
+      const type = item.type === "short" || item.type === "주관식" || !(Array.isArray(item.choices) && item.choices.filter(Boolean).length >= 2)
+        ? "short"
+        : "mcq";
+      if (type === "short") {
+        const media = await persistQuestionMedia(exam.id, item);
+        exam.questions.push({
+          q,
+          type: "short",
+          choices: [],
+          answer: String(item.answer || "").trim(),
+          explain: String(item.explain || "").trim(),
+          section: String(item.section || "").trim(),
+          images: media.images,
+          choiceImages: [],
+        });
+        continue;
+      }
+      const choices = Array.isArray(item.choices)
+        ? item.choices.map((choice) => String(choice || "").trim()).filter(Boolean)
+        : [];
+      const answer = normalizeMcqAnswer(item.answer, choices.length);
+      if (choices.length < 2 || answer == null) continue;
+      const media = await persistQuestionMedia(exam.id, item);
+      exam.questions.push({
+        q,
+        type: "mcq",
+        choices,
+        answer,
+        explain: String(item.explain || "").trim(),
+        section: String(item.section || "").trim(),
+        images: media.images,
+        choiceImages: media.choiceImages,
+        choiceLabels: Array.isArray(item.choiceLabels) ? item.choiceLabels.map((label) => String(label || "")) : [],
+      });
+    }
+    exam.questionCount = exam.questions.length;
+    await writeExam(exam);
+    res.json({ ok: true, count: exam.questions.length, questions: exam.questions });
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : "");
+    if (/too large|16MB|BSON/i.test(msg)) {
+      return res.status(400).json({ error: "문항 데이터가 너무 큽니다. 이미지를 줄이거나 나눠서 등록해 주세요." });
+    }
+    res.status(500).json({ error: msg || "문항을 등록하지 못했습니다." });
+  }
+});
+
 app.post("/api/admin/exams/:id/questions", auth, adminOnly, async (req, res) => {
   const q = String(req.body.q || "").trim();
   const type = req.body.type === "short" ? "short" : "mcq";
   const explain = String(req.body.explain || "").trim();
   const section = String(req.body.section || "").trim();
   if (!q) return res.status(400).json({ error: "문제를 입력해 주세요." });
-  const exam = await findExam(req.params.id);
+  const exam = await loadExamForWrite(req.params.id, req.body);
   if (!exam) return res.status(404).json({ error: "시험을 찾을 수 없습니다." });
   exam.questions = exam.questions || [];
   if (type === "short") {
@@ -1191,57 +1304,12 @@ app.post("/api/admin/exams/:id/questions", auth, adminOnly, async (req, res) => 
   last.images = media.images;
   last.choiceImages = media.choiceImages;
   exam.questionCount = exam.questions.length;
-  await writeExam(exam);
-  res.json({ ok: true, questions: exam.questions });
-});
-
-app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res) => {
-  const items = Array.isArray(req.body.questions) ? req.body.questions : [];
-  if (!items.length) return res.status(400).json({ error: "등록할 문항이 없습니다." });
-  const exam = await findExam(req.params.id);
-  if (!exam) return res.status(404).json({ error: "시험을 찾을 수 없습니다." });
-  exam.questions = exam.questions || [];
-  for (const item of items) {
-    const q = String(item.q || "").trim();
-    if (!q) continue;
-    const type = item.type === "short" || item.type === "주관식" || !(Array.isArray(item.choices) && item.choices.filter(Boolean).length >= 2)
-      ? "short"
-      : "mcq";
-    if (type === "short") {
-      const media = await persistQuestionMedia(exam.id, item);
-      exam.questions.push({
-        q,
-        type: "short",
-        choices: [],
-        answer: String(item.answer || "").trim(),
-        explain: String(item.explain || "").trim(),
-        section: String(item.section || "").trim(),
-        images: media.images,
-        choiceImages: [],
-      });
-      continue;
-    }
-    const choices = Array.isArray(item.choices)
-      ? item.choices.map((choice) => String(choice || "").trim()).filter(Boolean)
-      : [];
-    const answer = normalizeMcqAnswer(item.answer, choices.length);
-    if (choices.length < 2 || answer == null) continue;
-    const media = await persistQuestionMedia(exam.id, item);
-    exam.questions.push({
-      q,
-      type: "mcq",
-      choices,
-      answer,
-      explain: String(item.explain || "").trim(),
-      section: String(item.section || "").trim(),
-      images: media.images,
-      choiceImages: media.choiceImages,
-      choiceLabels: Array.isArray(item.choiceLabels) ? item.choiceLabels.map((label) => String(label || "")) : [],
-    });
+  try {
+    await writeExam(exam);
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "문항을 저장하지 못했습니다." });
   }
-  exam.questionCount = exam.questions.length;
-  await writeExam(exam);
-  res.json({ ok: true, count: exam.questions.length, questions: exam.questions });
+  res.json({ ok: true, questions: exam.questions });
 });
 
 app.post("/api/admin/exams/:id/import-pdf", auth, adminOnly, async (req, res) => {

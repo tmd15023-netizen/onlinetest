@@ -616,7 +616,8 @@ function showQuestionPreview(id, questions, bannerMessage, ok, options = {}) {
     }).length;
     if (missing && !confirm(`정답을 확인하지 않은 문항이 ${missing}개입니다. 그대로 등록할까요?`)) return;
     try {
-      await Api.bulkQuestions(id, packed);
+      const title = document.querySelector(".page-head h1")?.textContent || "";
+      await Api.bulkQuestions(id, packed, { title });
       window._pdfDraft = null;
       window._pdfEditing = new Set();
       alert("문항을 등록했습니다.");

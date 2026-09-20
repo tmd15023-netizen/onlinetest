@@ -104,11 +104,33 @@ window.Api = {
       body: JSON.stringify(body),
     });
   },
-  bulkQuestions(id, questions) {
-    return this.request(`/api/admin/exams/${encodeURIComponent(id)}/questions/bulk`, {
-      method: "POST",
-      body: JSON.stringify({ questions }),
-    });
+  bulkQuestions(id, questions, extra = {}) {
+    const packed = (questions || []).map((item) => ({
+      ...item,
+      images: (item.images || []).filter((src) => String(src || "").startsWith("/media/") || String(src || "").startsWith("data:image/")),
+      choiceImages: Array.isArray(item.choiceImages)
+        ? item.choiceImages.map((row) =>
+            (row || []).filter((src) => String(src || "").startsWith("/media/") || String(src || "").startsWith("data:image/"))
+          )
+        : [],
+    }));
+    const size = 8;
+    return (async () => {
+      let last = { ok: true, questions: [] };
+      for (let i = 0; i < packed.length; i += size) {
+        last = await this.request(`/api/admin/exams/${encodeURIComponent(id)}/questions/bulk`, {
+          method: "POST",
+          body: JSON.stringify({
+            questions: packed.slice(i, i + size),
+            title: extra.title || "",
+            category: extra.category || "",
+            minutes: extra.minutes,
+            replace: Boolean(extra.replace) && i === 0,
+          }),
+        });
+      }
+      return last;
+    })();
   },
   importPdf(id, pdf, filename) {
     return this.request(`/api/admin/exams/${encodeURIComponent(id)}/import-pdf`, {

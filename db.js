@@ -60,7 +60,7 @@ const examSchema = new mongoose.Schema(
     password: { type: String, default: "" },
     questions: { type: Array, default: [] },
   },
-  { collection: "exams" }
+  { collection: "exams", id: false }
 );
 
 const noticeSchema = new mongoose.Schema(
@@ -187,7 +187,7 @@ async function connectMongo() {
       dns.setServers(["8.8.8.8", "1.1.1.1", "168.126.63.1"]);
     }
     const options = {
-      serverSelectionTimeoutMS: process.env.VERCEL ? 5000 : 8000,
+      serverSelectionTimeoutMS: process.env.VERCEL ? 8000 : 8000,
       maxPoolSize: process.env.VERCEL ? 1 : 10,
     };
     if (!process.env.VERCEL) options.family = 4;
@@ -429,19 +429,45 @@ async function ensureSettings(defaults) {
 }
 
 async function listExams() {
+  await ensureMongo();
   if (!mongoReady()) return [];
   return Exam.find({}).lean();
 }
 
 async function findExam(id) {
+  await ensureMongo();
   if (!mongoReady()) return null;
-  return Exam.findOne({ id }).lean();
+  const want = decodeURIComponent(String(id || "")).trim();
+  if (!want) return null;
+  const found = await Exam.findOne({ id: want }).lean();
+  if (found) return found;
+  const all = await Exam.find({}).lean();
+  return all.find((item) => String(item.id) === want || String(item._id) === want) || null;
+}
+
+function examPayload(exam) {
+  const { _id, __v, ...rest } = exam || {};
+  return {
+    id: String(rest.id || exam.id || "").trim(),
+    title: rest.title,
+    desc: rest.desc,
+    category: rest.category,
+    minutes: rest.minutes,
+    tag: rest.tag,
+    questionCount: rest.questionCount,
+    seed: rest.seed,
+    demoBest: rest.demoBest,
+    password: rest.password || "",
+    questions: Array.isArray(rest.questions) ? rest.questions : [],
+  };
 }
 
 async function upsertExam(exam) {
+  await ensureMongo();
   if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
-  const { _id, __v, ...payload } = exam;
-  return Exam.findOneAndUpdate({ id: exam.id }, { $set: payload }, { upsert: true, new: true }).lean();
+  const payload = examPayload(exam);
+  if (!payload.id) throw new Error("시험 ID가 없습니다.");
+  return Exam.findOneAndUpdate({ id: payload.id }, { $set: payload }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
 }
 
 async function deleteExam(id) {
