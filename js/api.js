@@ -89,6 +89,12 @@ window.Api = {
       method: "DELETE",
     });
   },
+  reorderExams(ids) {
+    return this.request("/api/admin/exams/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ ids }),
+    });
+  },
   examQuestions(id) {
     return this.request(`/api/admin/exams/${encodeURIComponent(id)}/questions`);
   },

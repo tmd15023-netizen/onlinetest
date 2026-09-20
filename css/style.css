@@ -648,6 +648,26 @@ button {
   min-width: 64px;
 }
 
+.exam-order {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.exam-order-btn {
+  min-width: 52px !important;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.exam-order-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .btn.danger-text {
   color: #d44848;
 }
@@ -2248,7 +2268,8 @@ button {
   }
 
   .exam-actions {
-    width: 100%;
+    width: auto;
+    margin-left: auto;
     justify-content: flex-end;
   }
 

@@ -734,7 +734,7 @@ async function renderAdminExams() {
     `
       <section class="page-head">
         <h1>시험 관리</h1>
-        <p>시험을 만들고, 등록된 시험을 수정하거나 삭제할 수 있습니다.</p>
+        <p>시험을 만들고, 등록된 시험을 수정하거나 삭제할 수 있습니다. 목록에서 위·아래로 순서를 바꾸면 응시 화면에도 그대로 반영됩니다.</p>
       </section>
       ${error ? `<p class="form-banner err">${escapeHtml(error)}</p>` : ""}
       <section class="card page-card" style="padding:20px 24px 24px">
@@ -757,8 +757,12 @@ async function renderAdminExams() {
         <div class="exam-head"><h2>등록된 시험</h2><span class="exam-count">${exams.length}개</span></div>
         ${exams
           .map(
-            (exam) => `
+            (exam, index) => `
           <div class="exam-item">
+            <div class="exam-order">
+              <button class="btn btn-ghost exam-order-btn" type="button" data-exam-up="${escapeHtml(exam.id)}" ${index === 0 ? "disabled" : ""} aria-label="위로">위로</button>
+              <button class="btn btn-ghost exam-order-btn" type="button" data-exam-down="${escapeHtml(exam.id)}" ${index === exams.length - 1 ? "disabled" : ""} aria-label="아래로">아래로</button>
+            </div>
             <div class="exam-main">
               <div class="exam-title-row">
                 <h3>${escapeHtml(exam.title)}</h3>
@@ -816,6 +820,27 @@ async function renderAdminExams() {
         alert(err.message);
       }
     });
+  });
+  const moveExam = async (id, dir) => {
+    const ids = exams.map((item) => item.id);
+    const index = ids.indexOf(id);
+    const next = dir === "up" ? index - 1 : index + 1;
+    if (index < 0 || next < 0 || next >= ids.length) return;
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    const y = window.scrollY;
+    try {
+      await Api.reorderExams(ids);
+      await renderAdminExams();
+      window.scrollTo(0, y);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+  document.querySelectorAll("[data-exam-up]").forEach((btn) => {
+    btn.addEventListener("click", () => moveExam(btn.dataset.examUp, "up"));
+  });
+  document.querySelectorAll("[data-exam-down]").forEach((btn) => {
+    btn.addEventListener("click", () => moveExam(btn.dataset.examDown, "down"));
   });
 }
 

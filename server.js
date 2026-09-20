@@ -174,7 +174,29 @@ async function writeSettings(patch) {
 async function listAllExams() {
   await dbx.ensureMongo();
   if (dbx.mongoReady()) return dbx.listExams();
-  return loadDb().exams || [];
+  return dbx.sortExamList(loadDb().exams || []);
+}
+
+async function nextExamSort() {
+  const exams = await listAllExams();
+  const nums = exams.map((item) => Number(item.sort)).filter((n) => Number.isFinite(n));
+  return nums.length ? Math.max(...nums) + 1 : exams.length;
+}
+
+async function writeExamOrder(ids) {
+  const list = (Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean);
+  if (!list.length) throw new Error("바꿀 시험이 없습니다.");
+  await dbx.ensureMongo();
+  if (dbx.mongoReady()) await dbx.reorderExams(list);
+  else if (process.env.VERCEL) throw new Error("회원 DB에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+  const db = loadDb();
+  const byId = new Map((db.exams || []).map((exam) => [exam.id, exam]));
+  list.forEach((id, index) => {
+    if (byId.has(id)) byId.get(id).sort = index;
+  });
+  db.exams = dbx.sortExamList(db.exams || []);
+  saveDb(db);
+  return listAllExams();
 }
 
 function examShell(id, fallback = {}) {
@@ -189,6 +211,7 @@ function examShell(id, fallback = {}) {
     seed: Date.now() % 100000,
     password: "",
     questions: [],
+    sort: Number.isFinite(Number(fallback.sort)) ? Number(fallback.sort) : 0,
   };
 }
 
@@ -691,6 +714,7 @@ function publicExam(exam) {
     questionCount: customCount || exam.questionCount || 0,
     hasPassword: Boolean(exam.password),
     demoBest: exam.demoBest,
+    sort: Number.isFinite(Number(exam.sort)) ? Number(exam.sort) : 0,
   };
 }
 
@@ -1145,6 +1169,21 @@ app.get("/api/admin/exams", auth, adminOnly, async (req, res) => {
   );
 });
 
+app.put("/api/admin/exams/reorder", auth, adminOnly, async (req, res) => {
+  try {
+    const exams = await writeExamOrder(req.body.ids || req.body.order);
+    res.json(
+      exams.map((exam) => ({
+        ...publicExam(exam),
+        questionCount: (exam.questions && exam.questions.length) || exam.questionCount || 0,
+        customQuestions: (exam.questions || []).length,
+      }))
+    );
+  } catch (err) {
+    res.status(500).json({ error: err.message || "시험 순서를 저장하지 못했습니다." });
+  }
+});
+
 app.post("/api/admin/exams", auth, adminOnly, async (req, res) => {
   const title = String(req.body.title || "").trim();
   if (!title) return res.status(400).json({ error: "시험 제목을 입력해 주세요." });
@@ -1159,6 +1198,7 @@ app.post("/api/admin/exams", auth, adminOnly, async (req, res) => {
     seed: Date.now() % 100000,
     password: req.body.password ? hash(req.body.password) : "",
     questions: [],
+    sort: await nextExamSort(),
   };
   try {
     await writeExam(exam);

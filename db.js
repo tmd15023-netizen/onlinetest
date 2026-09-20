@@ -59,6 +59,7 @@ const examSchema = new mongoose.Schema(
     demoBest: Number,
     password: { type: String, default: "" },
     questions: { type: Array, default: [] },
+    sort: { type: Number, default: 0 },
   },
   { collection: "exams", id: false }
 );
@@ -427,7 +428,29 @@ async function ensureSettings(defaults) {
 async function listExams() {
   await ensureMongo();
   if (!mongoReady()) return [];
-  return Exam.find({}).lean();
+  return sortExamList(await Exam.find({}).lean());
+}
+
+function sortExamList(list) {
+  return [...(list || [])]
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const ao = Number.isFinite(Number(a.item.sort)) ? Number(a.item.sort) : a.index + 100000;
+      const bo = Number.isFinite(Number(b.item.sort)) ? Number(b.item.sort) : b.index + 100000;
+      if (ao !== bo) return ao - bo;
+      return a.index - b.index;
+    })
+    .map((row) => row.item);
+}
+
+async function reorderExams(ids) {
+  await ensureMongo();
+  if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
+  const list = (Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean);
+  for (let i = 0; i < list.length; i += 1) {
+    await Exam.updateOne({ id: list[i] }, { $set: { sort: i } });
+  }
+  return listExams();
 }
 
 async function findExam(id) {
@@ -455,6 +478,7 @@ function examPayload(exam) {
     demoBest: rest.demoBest,
     password: rest.password || "",
     questions: Array.isArray(rest.questions) ? rest.questions : [],
+    sort: Number.isFinite(Number(rest.sort)) ? Number(rest.sort) : 0,
   };
 }
 
@@ -566,6 +590,8 @@ module.exports = {
   saveSettings,
   ensureSettings,
   listExams,
+  sortExamList,
+  reorderExams,
   findExam,
   upsertExam,
   deleteExam,
