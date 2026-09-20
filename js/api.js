@@ -246,10 +246,10 @@ const Api = window.Api;
 
 async function loadExams() {
   const list = await Api.exams();
-  window.LIVE_EXAMS = list;
-  return list;
+  window.LIVE_EXAMS = Array.isArray(list) ? list : [];
+  return window.LIVE_EXAMS;
 }
 
 function getExamList() {
-  return window.LIVE_EXAMS || EXAMS;
+  return Array.isArray(window.LIVE_EXAMS) ? window.LIVE_EXAMS : [];
 }

@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const express = require("express");
-const { APP, EXAMS, pickQuestions, examGradeLabel } = require("./js/data.js");
+const { APP, pickQuestions, examGradeLabel } = require("./js/data.js");
 const {
   parseQuestionsFromText,
   parseAnswerKeyFromText,
@@ -76,11 +76,7 @@ function defaultDb() {
       adminPassword: hash("oncodelab"),
     },
     users: [],
-    exams: EXAMS.map((exam) => ({
-      ...exam,
-      password: "",
-      questions: [],
-    })),
+    exams: [],
     attempts: [],
     notices: [],
   };
@@ -177,19 +173,8 @@ async function writeSettings(patch) {
 
 async function listAllExams() {
   await dbx.ensureMongo();
-  const local = loadDb().exams || [];
-  if (dbx.mongoReady()) {
-    const remote = await dbx.ensureExams(local);
-    const byId = new Map();
-    local.forEach((exam) => {
-      if (exam && exam.id) byId.set(String(exam.id), exam);
-    });
-    (remote || []).forEach((exam) => {
-      if (exam && exam.id) byId.set(String(exam.id), exam);
-    });
-    return [...byId.values()];
-  }
-  return local;
+  if (dbx.mongoReady()) return dbx.listExams();
+  return loadDb().exams || [];
 }
 
 function examShell(id, fallback = {}) {
@@ -210,7 +195,8 @@ function examShell(id, fallback = {}) {
 async function loadExamForWrite(id, fallback = {}) {
   const exam = await findExam(id);
   if (exam) return exam;
-  if (!safeExamId(id)) return null;
+  if (!safeExamId(id) || !/^exam-[a-z0-9-]+$/i.test(id)) return null;
+  if (!String(fallback.title || "").trim()) return null;
   return examShell(id, fallback);
 }
 
@@ -270,19 +256,8 @@ async function findExam(id) {
   const want = decodeURIComponent(String(id || "")).trim().split("/")[0];
   if (!want) return null;
   await dbx.ensureMongo();
-  if (dbx.mongoReady()) {
-    const exam = await dbx.findExam(want);
-    if (exam) return exam;
-  }
-  const local = (loadDb().exams || []).find((item) => item.id === want) || null;
-  if (local && dbx.mongoReady()) {
-    try {
-      await dbx.upsertExam(local);
-    } catch (err) {
-      console.error("시험 Mongo 복구 실패:", err.message);
-    }
-  }
-  return local;
+  if (dbx.mongoReady()) return dbx.findExam(want);
+  return (loadDb().exams || []).find((item) => item.id === want) || null;
 }
 
 async function writeExam(exam) {
@@ -312,11 +287,15 @@ async function writeExam(exam) {
 }
 
 async function removeExam(id) {
-  if (dbx.mongoReady()) await dbx.deleteExam(id);
+  await dbx.ensureMongo();
+  let exam = null;
+  if (dbx.mongoReady()) exam = await dbx.deleteExam(id);
   const db = loadDb();
-  const index = db.exams.findIndex((item) => item.id === id);
-  if (index < 0) return null;
-  const [exam] = db.exams.splice(index, 1);
+  db.exams = (db.exams || []).filter((item) => {
+    if (item.id !== id) return true;
+    if (!exam) exam = item;
+    return false;
+  });
   saveDb(db);
   return exam;
 }

@@ -161,10 +161,6 @@ async function migrateFromJson() {
     });
     console.log("관리자 비밀번호·입장코드를 MongoDB로 옮겼습니다.");
   }
-  if (Array.isArray(raw.exams) && raw.exams.length && (await Exam.countDocuments()) === 0) {
-    await Exam.insertMany(raw.exams);
-    console.log(`시험 ${raw.exams.length}개를 MongoDB로 옮겼습니다.`);
-  }
 }
 
 async function connectMongo() {
@@ -471,6 +467,7 @@ async function upsertExam(exam) {
 }
 
 async function deleteExam(id) {
+  await ensureMongo();
   if (!mongoReady()) throw new Error("MongoDB에 연결되지 않았습니다.");
   await Media.deleteMany({ examId: id });
   return Exam.findOneAndDelete({ id }).lean();
@@ -499,11 +496,9 @@ async function deleteMediaByExam(examId) {
   await Media.deleteMany({ examId });
 }
 
-async function ensureExams(defaults) {
-  if (!mongoReady()) return defaults;
-  const count = await Exam.countDocuments();
-  if (count > 0) return listExams();
-  if (defaults.length) await Exam.insertMany(defaults);
+async function ensureExams(_defaults) {
+  await ensureMongo();
+  if (!mongoReady()) return [];
   return listExams();
 }
 
