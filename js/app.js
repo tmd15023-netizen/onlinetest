@@ -338,8 +338,10 @@ function examModalHtml() {
         <div class="modal-meta">
           <span class="pill">문제 ${state.modalExam.questionCount}개</span>
           <span class="pill">${state.modalExam.minutes}분</span>
-          <span class="pill">${escapeHtml(state.modalExam.category)}</span>
-          ${state.modalExam.hasPassword ? `<span class="pill">비밀번호 필요</span>` : ""}
+        </div>
+        <div class="exam-grade ${examGradeClass(state.modalExam.category)}" style="margin:12px 0 0">
+          <span class="exam-grade-label">급수</span>
+          <strong>${escapeHtml(examGradeLabel(state.modalExam.category))}</strong>
         </div>
         ${
           state.modalExam.hasPassword
@@ -381,12 +383,17 @@ function examListHtml() {
       ${exams
         .map((exam) => {
           const best = bestScoreFor(exam.id) ?? exam.demoBest;
+          const grade = examGradeClass(exam.category);
           return `
             <button class="exam-item" data-exam="${exam.id}">
               <div class="exam-title-row">
                 <h3>${escapeHtml(exam.title)}</h3>
-                <span class="badge">${escapeHtml(exam.category)}</span>
+                <span class="badge ${grade}">${escapeHtml(examGradeShort(exam.category))}</span>
                 ${exam.hasPassword ? `<span class="badge lock">잠금</span>` : ""}
+              </div>
+              <div class="exam-grade ${grade}">
+                <span class="exam-grade-label">급수</span>
+                <strong>${escapeHtml(examGradeLabel(exam.category))}</strong>
               </div>
               <p class="exam-desc">${escapeHtml(exam.desc)}</p>
               <div class="exam-meta">

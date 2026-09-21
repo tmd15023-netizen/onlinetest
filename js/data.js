@@ -18,6 +18,13 @@ function examGradeShort(category) {
   return raw ? "기타" : "1급";
 }
 
+function examGradeClass(category) {
+  const short = examGradeShort(category);
+  if (short === "2급") return "grade-2";
+  if (short === "1급") return "grade-1";
+  return "grade-other";
+}
+
 const NOTICES = [
   {
     id: "n1",
@@ -493,5 +500,5 @@ const EXAMS = [
 ];
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { APP, NOTICES, QUESTION_BANK, pickQuestions, EXAMS, EXAM_GRADES, examGradeLabel, examGradeShort };
+  module.exports = { APP, NOTICES, QUESTION_BANK, pickQuestions, EXAMS, EXAM_GRADES, examGradeLabel, examGradeShort, examGradeClass };
 }

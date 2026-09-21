@@ -542,6 +542,10 @@ button {
   color: #2f6bff;
 }
 
+.exam-grade.grade-1 strong {
+  color: #2f6bff;
+}
+
 .exam-grade.grade-2 {
   background: #f4eefe;
 }
