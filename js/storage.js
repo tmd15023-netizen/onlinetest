@@ -14,6 +14,15 @@ function readJson(key, fallback) {
   }
 }
 
+function keepStoredImage(src) {
+  const value = String(src || "").trim();
+  return value.startsWith("/media/") || value.startsWith("/api/media/");
+}
+
+function slimImageList(list) {
+  return (list || []).filter(keepStoredImage);
+}
+
 function writeJson(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
@@ -23,8 +32,8 @@ function writeJson(key, value) {
         ...value,
         questions: (value.questions || []).map((item) => ({
           ...item,
-          images: [],
-          choiceImages: [],
+          images: slimImageList(item.images),
+          choiceImages: Array.isArray(item.choiceImages) ? item.choiceImages.map(slimImageList) : [],
         })),
       };
       try {
@@ -79,7 +88,22 @@ const Storage = {
   getSession() {
     const live = window.__liveExam;
     const stored = readJson(STORE_KEYS.session, null);
-    if (live && stored && live.examId === stored.examId) return live;
+    if (live && stored && live.examId === stored.examId) {
+      const liveHas = (live.questions || []).some((q) => (q.images || []).length);
+      const storedHas = (stored.questions || []).some((q) => (q.images || []).length);
+      if (!liveHas && storedHas) {
+        live.questions = (live.questions || []).map((q, i) => {
+          const src = stored.questions[i];
+          if (!src) return q;
+          return {
+            ...q,
+            images: q.images && q.images.length ? q.images : src.images || [],
+            choiceImages: q.choiceImages && q.choiceImages.length ? q.choiceImages : src.choiceImages || [],
+          };
+        });
+      }
+      return live;
+    }
     return live || stored;
   },
   clearSession() {

@@ -185,9 +185,14 @@ async function connectMongo() {
     }
     const options = {
       serverSelectionTimeoutMS: process.env.VERCEL ? 8000 : 8000,
-      maxPoolSize: process.env.VERCEL ? 1 : 10,
+      maxPoolSize: process.env.VERCEL ? 5 : 10,
     };
     if (!process.env.VERCEL) options.family = 4;
+    if (mongoose.connection.readyState === 2) {
+      await mongoose.connection.asPromise();
+      connected = mongoose.connection.readyState === 1;
+      return connected;
+    }
     await mongoose.connect(uri, options);
     connected = true;
     if (!process.env.VERCEL) await migrateFromJson();

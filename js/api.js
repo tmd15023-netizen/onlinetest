@@ -113,10 +113,20 @@ window.Api = {
   bulkQuestions(id, questions, extra = {}) {
     const packed = (questions || []).map((item) => ({
       ...item,
-      images: (item.images || []).filter((src) => String(src || "").startsWith("/media/") || String(src || "").startsWith("data:image/")),
+      images: (item.images || []).filter(
+        (src) =>
+          String(src || "").startsWith("/media/") ||
+          String(src || "").startsWith("/api/media/") ||
+          String(src || "").startsWith("data:image/")
+      ),
       choiceImages: Array.isArray(item.choiceImages)
         ? item.choiceImages.map((row) =>
-            (row || []).filter((src) => String(src || "").startsWith("/media/") || String(src || "").startsWith("data:image/"))
+            (row || []).filter(
+              (src) =>
+                String(src || "").startsWith("/media/") ||
+                String(src || "").startsWith("/api/media/") ||
+                String(src || "").startsWith("data:image/")
+            )
           )
         : [],
     }));

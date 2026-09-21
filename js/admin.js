@@ -121,7 +121,7 @@ function questionImageEditorHtml(images) {
         .map(
           (src, i) => `
         <div class="q-image-chip">
-          <img src="${safeImageSrc(src)}" alt="문항 이미지" />
+          ${examImageTag(src, "q-image")}
           <button type="button" class="btn btn-ghost" data-remove-img="${i}">삭제</button>
         </div>
       `

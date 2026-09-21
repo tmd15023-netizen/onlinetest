@@ -59,6 +59,7 @@ function safeImageSrc(src) {
   if (
     value.startsWith("data:image/") ||
     value.startsWith("/media/") ||
+    value.startsWith("/api/media/") ||
     value.startsWith("https://") ||
     value.startsWith("http://127.0.0.1") ||
     value.startsWith("http://localhost") ||
@@ -67,7 +68,9 @@ function safeImageSrc(src) {
     if (value.startsWith("http://127.0.0.1") || value.startsWith("http://localhost")) {
       try {
         const parsed = new URL(value);
-        if (parsed.pathname.startsWith("/media/")) return parsed.pathname.replace(/"/g, "");
+        if (parsed.pathname.startsWith("/media/") || parsed.pathname.startsWith("/api/media/")) {
+          return parsed.pathname.replace(/"/g, "");
+        }
       } catch (err) {
         /* keep original */
       }
@@ -77,11 +80,28 @@ function safeImageSrc(src) {
   return "";
 }
 
+function retryExamImage(img) {
+  if (!img || img.dataset.retry === "2") return;
+  const src = String(img.currentSrc || img.getAttribute("src") || "");
+  const match = src.match(/\/(?:api\/)?media\/([^/?#]+)\/([^/?#]+)/);
+  if (!match) return;
+  const n = Number(img.dataset.retry || "0") + 1;
+  img.dataset.retry = String(n);
+  const examId = encodeURIComponent(match[1]);
+  const name = encodeURIComponent(match[2]);
+  const next = n === 1 ? `/api/media/${examId}/${name}` : `/media/${examId}/${name}`;
+  img.src = `${next}?r=${Date.now()}`;
+}
+window.retryExamImage = retryExamImage;
+
+function examImageTag(src, extraClass = "q-image") {
+  const value = safeImageSrc(src);
+  if (!value) return "";
+  return `<img class="${extraClass}" src="${value}" alt="문항 이미지" loading="lazy" decoding="async" onerror="retryExamImage(this)" />`;
+}
+
 function questionImagesHtml(images, extraClass = "") {
-  const tags = (images || [])
-    .map((src) => safeImageSrc(src))
-    .filter(Boolean)
-    .map((src) => `<img class="q-image" src="${src}" alt="문항 이미지" />`);
+  const tags = (images || []).map((src) => examImageTag(src)).filter(Boolean);
   if (!tags.length) return "";
   return `<div class="q-images ${extraClass}">${tags.join("")}</div>`;
 }
@@ -927,7 +947,12 @@ function renderExam() {
         if (!current || current.examId !== live.examId) return;
         current.questions = current.questions.map((q) => {
           const src = (live.questions || []).find((item) => item.no === q.no);
-          return src ? { ...q, images: src.images || [], choiceImages: src.choiceImages || [] } : q;
+          if (!src) return q;
+          return {
+            ...q,
+            images: (src.images && src.images.length ? src.images : q.images) || [],
+            choiceImages: (src.choiceImages && src.choiceImages.length ? src.choiceImages : q.choiceImages) || [],
+          };
         });
         window.__liveExam = current;
         Storage.saveSession(current);

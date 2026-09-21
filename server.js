@@ -413,7 +413,7 @@ function safeExamId(id) {
 
 function isSafeImageSrc(src) {
   const value = String(src || "").trim();
-  return value.startsWith("data:image/") || value.startsWith("/media/") || /^https?:\/\//i.test(value);
+  return value.startsWith("data:image/") || value.startsWith("/media/") || value.startsWith("/api/media/") || /^https?:\/\//i.test(value);
 }
 
 function sanitizeImages(list) {
@@ -466,7 +466,29 @@ function parseDataUri(dataUri) {
 function mediaToBuffer(data) {
   if (!data) return null;
   if (Buffer.isBuffer(data)) return data;
-  if (data.buffer) return Buffer.from(data.buffer);
+  if (typeof data === "string") {
+    try {
+      return Buffer.from(data.replace(/\s/g, ""), "base64");
+    } catch (err) {
+      return null;
+    }
+  }
+  if (typeof data.value === "function") {
+    try {
+      const value = data.value();
+      if (Buffer.isBuffer(value)) return value;
+      if (value) return Buffer.from(value);
+    } catch (err) {
+      /* Binary.value 미지원 */
+    }
+  }
+  if (data.buffer) {
+    try {
+      return Buffer.from(data.buffer);
+    } catch (err) {
+      /* ignore */
+    }
+  }
   if (data.type === "Buffer" && Array.isArray(data.data)) return Buffer.from(data.data);
   try {
     return Buffer.from(data);
@@ -761,26 +783,51 @@ app.use((req, res, next) => {
   next();
 });
 app.use("/data", (req, res) => res.sendStatus(404));
-app.get("/media/:examId/:name", async (req, res) => {
-  const examId = safeExamId(req.params.examId);
-  const name = String(req.params.name || "").replace(/[^a-zA-Z0-9._-]/g, "");
-  if (!examId || !name) return res.sendStatus(404);
+async function sendExamMedia(req, res) {
+  await Promise.resolve(boot).catch(() => {});
+  await dbx.ensureMongo();
+  let examId = safeExamId(req.params.examId);
+  let name = String(req.params.name || "").replace(/[^a-zA-Z0-9._-]/g, "");
+  if (!examId || !name) {
+    const parts = String(req.path || req.url || "").split("/").filter(Boolean);
+    const idx = parts.lastIndexOf("media");
+    if (idx >= 0 && parts[idx + 1] && parts[idx + 2]) {
+      examId = examId || safeExamId(decodeURIComponent(parts[idx + 1]));
+      name = name || String(decodeURIComponent(parts[idx + 2])).replace(/[^a-zA-Z0-9._-]/g, "");
+    }
+  }
+  if (!examId || !name) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(404).type("text/plain").send("Not Found");
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const file = await dbx.findMedia(examId, name);
+      const buf = mediaToBuffer(file && file.data);
+      if (buf && buf.length) {
+        res.setHeader("Content-Type", file.mime || mimeFromName(name));
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        return res.end(buf);
+      }
+    } catch (err) {
+      console.error("이미지 DB 조회 실패:", err.message);
+    }
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+      await dbx.ensureMongo();
+    }
+  }
   const disk = path.join(MEDIA_ROOT, examId, name);
   if (fs.existsSync(disk)) {
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.sendFile(path.resolve(disk));
   }
-  try {
-    const file = await dbx.findMedia(examId, name);
-    const buf = mediaToBuffer(file && file.data);
-    if (!buf || !buf.length) return res.sendStatus(404);
-    res.setHeader("Content-Type", file.mime || mimeFromName(name));
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    return res.end(buf);
-  } catch (err) {
-    return res.sendStatus(404);
-  }
-});
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(404).type("text/plain").send("Not Found");
+}
+app.get("/media/:examId/:name", sendExamMedia);
+app.get("/api/media/:examId/:name", sendExamMedia);
 app.use("/media", express.static(MEDIA_ROOT, { maxAge: "1h" }));
 app.use(express.static(__dirname, { maxAge: "7d", index: false }));
 app.get("/", (_req, res) => {
@@ -1014,10 +1061,12 @@ app.post("/api/exams/:id/start", auth, async (req, res) => {
   if (exam.password && hash(password) !== exam.password) {
     return res.status(403).json({ error: "시험 비밀번호가 올바르지 않습니다." });
   }
-  const source =
+  const source = await persistParsedQuestions(
+    exam.id,
     exam.questions && exam.questions.length
       ? exam.questions.map((item, i) => ({ ...item, no: i + 1 }))
-      : pickQuestions(exam.seed || 1, exam.questionCount || 10);
+      : pickQuestions(exam.seed || 1, exam.questionCount || 10)
+  );
   const live = {
     examId: exam.id,
     title: exam.title,
