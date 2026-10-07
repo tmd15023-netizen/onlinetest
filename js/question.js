@@ -22,19 +22,41 @@ function uniqueSortedIndexes(list) {
   return [...new Set((list || []).map(Number).filter((n) => Number.isInteger(n) && n >= 0))].sort((a, b) => a - b);
 }
 
+function parseIndexList(raw) {
+  if (raw == null || raw === "") return [];
+  if (Array.isArray(raw)) return uniqueSortedIndexes(raw.flatMap(parseIndexList));
+  if (typeof raw === "number") return uniqueSortedIndexes([raw]);
+  const text = String(raw).trim();
+  if (!text) return [];
+  if (/^\d+$/.test(text)) return uniqueSortedIndexes([Number(text)]);
+  const parts = text
+    .split(/[,，、/|;]+/)
+    .map((part) => part.replace(/번/g, "").trim())
+    .filter((part) => /^\d+$/.test(part))
+    .map(Number);
+  return uniqueSortedIndexes(parts.length ? parts : [text]);
+}
+
 function mcqAnswerIndexes(question) {
   if (!question) return [];
-  return uniqueSortedIndexes(Array.isArray(question.answer) ? question.answer : [question.answer]);
+  return parseIndexList(question.answer);
 }
 
 function selectedMcqIndexes(selected) {
-  if (Array.isArray(selected)) return uniqueSortedIndexes(selected);
-  if (selected == null || selected === "") return [];
-  return uniqueSortedIndexes([selected]);
+  return parseIndexList(selected);
+}
+
+function looksLikeMultiQuestion(question) {
+  const text = `${(question && question.q) || ""} ${(question && question.explain) || ""}`;
+  return /(모두\s*(고르|고른|선택)|해당되는\s*것을?\s*모두|옳은\s*것(?:을|만)?\s*모두|있는\s*대로|복수\s*(정답|응답|선택))/.test(text);
 }
 
 function isMultiMcq(question) {
-  return !isShortQuestion(question) && mcqAnswerIndexes(question).length > 1;
+  return !isShortQuestion(question) && (mcqAnswerIndexes(question).length > 1 || Boolean(question && question.multi) || looksLikeMultiQuestion(question));
+}
+
+function questionAllowsMulti(question) {
+  return !isShortQuestion(question);
 }
 
 function normalizeMcqAnswer(raw, choiceCount) {
@@ -78,6 +100,8 @@ const QuestionUtil = {
   mcqAnswerIndexes,
   selectedMcqIndexes,
   isMultiMcq,
+  questionAllowsMulti,
+  looksLikeMultiQuestion,
   normalizeMcqAnswer,
   formatMcqAnswerText,
   hasQuestionResponse,

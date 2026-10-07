@@ -631,7 +631,7 @@ function clientQuestion(item, index, exam) {
     images: sanitizeImages(item.images),
     choiceImages: Array.isArray(item.choiceImages) ? item.choiceImages.map(sanitizeImages) : [],
     choiceLabels: Array.isArray(item.choiceLabels) ? item.choiceLabels.map((label) => String(label || "")).filter(Boolean) : [],
-    multi: isMultiMcq(item),
+    multi: Boolean(item.multi) || isMultiMcq(item),
   };
 }
 
@@ -1327,6 +1327,7 @@ app.post("/api/admin/exams/:id/questions/bulk", auth, adminOnly, async (req, res
         type: "mcq",
         choices,
         answer,
+        multi: Array.isArray(answer) || Boolean(item.multi) || isMultiMcq({ ...item, answer }),
         explain: String(item.explain || "").trim(),
         section: String(item.section || "").trim(),
         images: media.images,
@@ -1365,7 +1366,16 @@ app.post("/api/admin/exams/:id/questions", auth, adminOnly, async (req, res) => 
     if (choices.length < 2 || choices.some((item) => !item) || answer == null) {
       return res.status(400).json({ error: "문제, 보기, 정답을 모두 입력해 주세요." });
     }
-    exam.questions.push({ q, type: "mcq", choices, answer, explain, section, images: [] });
+    exam.questions.push({
+      q,
+      type: "mcq",
+      choices,
+      answer,
+      multi: Array.isArray(answer) || isMultiMcq({ q, answer, choices }),
+      explain,
+      section,
+      images: [],
+    });
   }
   const last = exam.questions[exam.questions.length - 1];
   const media = await persistQuestionMedia(exam.id, { images: req.body.images, choiceImages: req.body.choiceImages });
@@ -1533,7 +1543,16 @@ app.put("/api/admin/exams/:id/questions/:index", auth, adminOnly, async (req, re
     if (choices.length < 2 || answer == null) {
       return res.status(400).json({ error: "문제, 보기, 정답을 모두 입력해 주세요." });
     }
-    next = { ...current, q, type: "mcq", choices, answer, explain, section };
+    next = {
+      ...current,
+      q,
+      type: "mcq",
+      choices,
+      answer,
+      multi: Array.isArray(answer) || isMultiMcq({ ...current, q, choices, answer }),
+      explain,
+      section,
+    };
   }
   const media = await persistQuestionMedia(exam.id, {
     images: req.body.images != null ? req.body.images : current.images,

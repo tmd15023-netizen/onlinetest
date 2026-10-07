@@ -840,15 +840,10 @@ function updateExamProgress(session) {
 
 function setExamMcq(session, no, choiceIdx) {
   const question = session.questions.find((item) => item.no === no);
-  const multi = Boolean(question && question.multi);
-  if (multi) {
-    const current = selectedMcqIndexes(session.answers[no]);
-    const next = current.includes(choiceIdx) ? current.filter((idx) => idx !== choiceIdx) : [...current, choiceIdx].sort((a, b) => a - b);
-    if (next.length) session.answers[no] = next;
-    else delete session.answers[no];
-  } else {
-    session.answers[no] = choiceIdx;
-  }
+  const current = selectedMcqIndexes(session.answers[no]);
+  const next = current.includes(choiceIdx) ? current.filter((idx) => idx !== choiceIdx) : [...current, choiceIdx].sort((a, b) => a - b);
+  if (next.length) session.answers[no] = next.length === 1 && !questionAllowsMulti(question) ? next[0] : next;
+  else delete session.answers[no];
   Storage.saveSession(session);
   const picked = new Set(selectedMcqIndexes(session.answers[no]));
   document.querySelectorAll(`.cbt-item[data-no="${no}"] [data-choice]`).forEach((btn) => {
@@ -889,7 +884,7 @@ function renderQuestionItem(session, item, idx) {
   return `
     <article class="cbt-item ${current ? "current" : ""} ${marked ? "marked" : ""}" id="q-${item.no}" data-no="${item.no}" data-idx="${idx}">
       <div class="cbt-q-head">
-        <span class="cbt-q-no"><span class="cbt-q-num">${item.no}</span>${short ? `<span class="cbt-q-kind">주관식</span>` : item.multi ? `<span class="cbt-q-kind">복수 정답</span>` : ""}</span>
+        <span class="cbt-q-no"><span class="cbt-q-num">${item.no}</span>${short ? `<span class="cbt-q-kind">주관식</span>` : item.multi || isMultiMcq(item) ? `<span class="cbt-q-kind">복수 선택</span>` : ""}</span>
       </div>
       <h2 class="cbt-stem">${escapeHtml(item.q)}</h2>
       ${questionImagesHtml(item.images)}
@@ -904,7 +899,7 @@ function renderQuestionItem(session, item, idx) {
           .map((choice, choiceIdx) => {
             const on = selectedMcqIndexes(selected).includes(choiceIdx);
             return `
-              <button class="cbt-choice ${on ? "selected" : ""}" data-q="${item.no}" data-choice="${choiceIdx}">
+              <button type="button" class="cbt-choice ${on ? "selected" : ""}" data-q="${item.no}" data-choice="${choiceIdx}">
                 <span class="cbt-mark">${(item.choiceLabels && item.choiceLabels[choiceIdx]) || CIRCLES[choiceIdx] || choiceIdx + 1}</span>
                 ${choiceBodyHtml(choice, item.choiceImages, choiceIdx)}
               </button>
@@ -952,6 +947,7 @@ function renderExam() {
             ...q,
             images: (src.images && src.images.length ? src.images : q.images) || [],
             choiceImages: (src.choiceImages && src.choiceImages.length ? src.choiceImages : q.choiceImages) || [],
+            multi: Boolean(src.multi || q.multi || isMultiMcq(src) || isMultiMcq(q)),
           };
         });
         window.__liveExam = current;
@@ -1034,7 +1030,7 @@ function renderExam() {
                         : `<div class="omr-bubbles">
                       ${Array.from({ length: bubbleCount }, (_, choiceIdx) => {
                         const enabled = choiceIdx < (item.choices || []).length;
-                        return `<button class="omr-dot ${selectedMcqIndexes(selected).includes(choiceIdx) ? "on" : ""}" data-omr-q="${item.no}" data-omr-idx="${choiceIdx}" data-omr-i="${idx}" ${enabled ? "" : "disabled"} title="${item.no}번 ${choiceIdx + 1}">${choiceIdx + 1}</button>`;
+                        return `<button type="button" class="omr-dot ${selectedMcqIndexes(selected).includes(choiceIdx) ? "on" : ""}" data-omr-q="${item.no}" data-omr-idx="${choiceIdx}" data-omr-i="${idx}" ${enabled ? "" : "disabled"} title="${item.no}번 ${choiceIdx + 1}">${choiceIdx + 1}</button>`;
                       }).join("")}
                     </div>`
                     }
