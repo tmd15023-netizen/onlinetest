@@ -405,7 +405,9 @@ function examListHtml() {
           const best = bestScoreFor(exam.id) ?? exam.demoBest;
           const grade = examGradeClass(exam.category);
           return `
-            <button class="exam-item" data-exam="${exam.id}">
+            ${exam.externalUrl
+              ? `<a class="exam-item" href="${escapeHtml(exam.externalUrl)}">`
+              : `<button class="exam-item" data-exam="${exam.id}">`}
               <div class="exam-title-row">
                 <h3>${escapeHtml(exam.title)}</h3>
                 <span class="badge ${grade}">${escapeHtml(examGradeShort(exam.category))}</span>
@@ -422,7 +424,7 @@ function examListHtml() {
                 <span class="meta-s">${best == null ? "미응시" : `최고 ${best}%`}</span>
                 <span class="meta-tag">#${exam.tag}</span>
               </div>
-            </button>
+            ${exam.externalUrl ? "</a>" : "</button>"}
           `;
         })
         .join("")}

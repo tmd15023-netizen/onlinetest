@@ -476,6 +476,7 @@ function examPayload(exam) {
     id: String(rest.id || exam.id || "").trim(),
     title: rest.title,
     desc: rest.desc,
+    externalUrl: rest.externalUrl || "",
     category: rest.category,
     minutes: rest.minutes,
     tag: rest.tag,
