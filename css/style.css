@@ -1,3 +1,26 @@
+.subject-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 16px; }
+.subject-section-head h2 { font-size: 18px; }
+.subject-section-head > span { font-size: 13px; color: var(--text-sub); }
+.subject-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 20px; }
+.subject-card { display: flex; flex-direction: column; align-items: stretch; min-height: 230px; padding: 26px; text-align: left; background: #fff; border: 1px solid var(--line-strong); border-radius: 20px; box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s, transform .15s; }
+.subject-card:hover { border-color: var(--primary); box-shadow: 0 10px 28px rgba(77,125,255,.1); transform: translateY(-2px); }
+.subject-card:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+.subject-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+.subject-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: var(--primary-soft); color: var(--primary); font-size: 26px; }
+.subject-card h3 { font-size: 19px; line-height: 1.5; overflow-wrap: anywhere; }
+.subject-card p { margin: 8px 0 22px; color: var(--text-sub); font-size: 14px; }
+.subject-card p strong { color: var(--text); }
+.subject-card-action { display: flex; justify-content: space-between; margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); color: var(--primary); font-size: 14px; font-weight: 700; }
+.subject-list-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 20px 0 16px; }
+.subject-list-heading h2 { font-size: 19px; }
+.subject-exam-list .exam-item { padding-top: 16px; padding-bottom: 16px; }
+.subject-exam-list .exam-meta { margin-top: 8px; }
+@media (max-width: 600px) {
+  .subject-grid { gap: 12px; }
+  .subject-card { min-height: 210px; padding: 22px; }
+  .subject-section-head { align-items: flex-start; flex-direction: column; gap: 4px; }
+}
+
 :root {
   --bg: #f5f7fb;
   --white: #ffffff;

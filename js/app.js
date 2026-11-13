@@ -380,22 +380,32 @@ function examModalHtml() {
 
 function examListHtml() {
   const list = getExamList();
-  const exams = list.filter((exam) => state.category === "all" || exam.category === state.category);
   const categories = [...new Set(list.map((exam) => exam.category))];
+  if (state.category === "all" || !categories.includes(state.category)) {
+    return `
+      <section class="exam-subjects" aria-label="시험 과목 선택">
+        <div class="subject-section-head"><h2>시험 과목</h2><span>${categories.length}개 과목 · 전체 ${list.length}개 시험</span></div>
+        <div class="subject-grid">
+          ${categories.map((category) => {
+            const count = list.filter((exam) => exam.category === category).length;
+            return `<button type="button" class="subject-card" data-cat="${escapeHtml(category)}">
+              <span class="subject-card-top"><span class="subject-icon" aria-hidden="true">▤</span><span class="badge ${examGradeClass(category)}">${escapeHtml(examGradeShort(category))}</span></span>
+              <h3>${escapeHtml(category)}</h3>
+              <p>등록된 시험 <strong>${count}개</strong></p>
+              <span class="subject-card-action">시험 목록 보기 <span aria-hidden="true">→</span></span>
+            </button>`;
+          }).join("")}
+        </div>
+        ${!categories.length ? `<div class="card empty"><p>등록된 시험 과목이 없습니다.</p></div>` : ""}
+      </section>`;
+  }
+  const exams = list.filter((exam) => exam.category === state.category);
   return `
-    <div class="filters">
-      <button class="chip ${state.category === "all" ? "active" : ""}" data-cat="all">전체 (${list.length})</button>
-      ${categories
-        .map(
-          (cat) => `
-        <button class="chip ${state.category === cat ? "active" : ""}" data-cat="${escapeHtml(cat)}">
-          <span class="dot"></span>${escapeHtml(cat)} (${list.filter((item) => item.category === cat).length})
-        </button>
-      `
-        )
-        .join("")}
+    <div class="subject-list-heading">
+      <button type="button" class="btn btn-ghost" data-cat="all">← 전체 과목</button>
+      <h2 id="selected-subject" tabindex="-1">${escapeHtml(state.category)}</h2>
     </div>
-    <section class="card exam-card">
+    <section class="card exam-card subject-exam-list">
       <div class="exam-head">
         <h2>시험 목록</h2>
         <span class="exam-count">${exams.length}개</span>
@@ -412,10 +422,6 @@ function examListHtml() {
                 <h3>${escapeHtml(exam.title)}</h3>
                 <span class="badge ${grade}">${escapeHtml(examGradeShort(exam.category))}</span>
                 ${exam.hasPassword ? `<span class="badge lock">잠금</span>` : ""}
-              </div>
-              <div class="exam-grade ${grade}">
-                <span class="exam-grade-label">급수</span>
-                <strong>${escapeHtml(examGradeLabel(exam.category))}</strong>
               </div>
               <p class="exam-desc">${escapeHtml(exam.desc)}</p>
               <div class="exam-meta">
@@ -436,7 +442,9 @@ function bindExamList(rerender) {
   document.querySelectorAll("[data-cat]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.category = btn.dataset.cat;
+      state.modalExam = null;
       rerender();
+      document.getElementById("selected-subject")?.focus({ preventScroll: true });
     });
   });
   document.querySelectorAll("[data-exam]").forEach((btn) => {
@@ -523,7 +531,7 @@ function renderDashboard() {
     `
       <section class="page-head">
         <h1>안녕하세요, ${escapeHtml(displayName(user))}님 👋</h1>
-        <p>응시 가능한 시험 목록입니다.</p>
+        <p>과목을 선택하면 해당 과목의 시험 목록을 볼 수 있습니다.</p>
       </section>
       <section class="card notice-card">
         <div class="card-head">
@@ -558,7 +566,7 @@ function renderExams() {
     `
       <section class="page-head">
         <h1>시험 목록</h1>
-        <p>응시 가능한 시험 목록입니다.</p>
+        <p>과목을 선택하면 해당 과목의 시험 목록을 볼 수 있습니다.</p>
       </section>
       ${examListHtml()}
     `,
