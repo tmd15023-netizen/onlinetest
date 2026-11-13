@@ -890,9 +890,9 @@ async function renderAdminExam(id, options = {}) {
           </div>
           <label class="check-row"><input type="checkbox" name="clearPassword" /> 비밀번호 제거</label>
           <div class="modal-actions" style="justify-content:flex-start;margin-top:12px">
-            <button class="btn btn-primary" type="submit">저장</button>
+            <button class="btn btn-primary" type="submit">${options.saved ? "저장 완료 ✓" : "저장"}</button>
             <button class="btn btn-ghost danger-text" id="del-exam" type="button">시험 삭제</button>
-            <span id="meta-banner"></span>
+            <span id="meta-banner" class="form-banner ${options.saved ? "ok" : ""}" role="status" aria-live="polite">${options.saved ? "변경 사항이 저장되었습니다." : ""}</span>
           </div>
         </form>
       </section>
@@ -995,10 +995,24 @@ async function renderAdminExam(id, options = {}) {
   );
   bindChrome();
   bindGradeFields(document.getElementById("exam-meta"));
+  if (Number.isFinite(options.pageY)) requestAnimationFrame(() => window.scrollTo(0, options.pageY));
+  document.getElementById("exam-meta").addEventListener("input", () => {
+    const button = document.querySelector('#exam-meta button[type="submit"]');
+    if (!button.disabled) {
+      button.textContent = "저장";
+      setBanner(document.getElementById("meta-banner"), "변경 사항을 저장해 주세요.", true);
+    }
+  });
   document.getElementById("exam-meta").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const banner = document.getElementById("meta-banner");
+    const button = form.querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = "저장 중…";
+    form.setAttribute("aria-busy", "true");
+    setBanner(banner, "변경 사항을 저장하고 있습니다…", true);
     const body = {
       title: formField(form, "title"),
       desc: formField(form, "desc"),
@@ -1011,10 +1025,13 @@ async function renderAdminExam(id, options = {}) {
     else if (formField(form, "password")) body.password = formField(form, "password");
     try {
       await Api.updateExam(id, body);
-      setBanner(banner, "저장했습니다.", true);
-      renderAdminExam(id);
+      await renderAdminExam(id, { saved: true, pageY: window.scrollY });
     } catch (err) {
-      setBanner(banner, err.message, false);
+      setBanner(banner, `저장하지 못했습니다. ${err.message}`, false);
+    } finally {
+      button.disabled = false;
+      button.textContent = "저장";
+      form.removeAttribute("aria-busy");
     }
   });
   document.getElementById("del-exam")?.addEventListener("click", async () => {
