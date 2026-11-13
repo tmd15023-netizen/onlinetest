@@ -406,7 +406,7 @@ function examListHtml() {
           const grade = examGradeClass(exam.category);
           return `
             ${exam.externalUrl
-              ? `<a class="exam-item" href="${escapeHtml(exam.externalUrl)}">`
+              ? `<a class="exam-item" href="${escapeHtml(exam.externalUrl)}" target="_blank" rel="noopener noreferrer">`
               : `<button class="exam-item" data-exam="${exam.id}">`}
               <div class="exam-title-row">
                 <h3>${escapeHtml(exam.title)}</h3>
@@ -419,7 +419,7 @@ function examListHtml() {
               </div>
               <p class="exam-desc">${escapeHtml(exam.desc)}</p>
               <div class="exam-meta">
-                ${exam.externalUrl ? `<span class="meta-q">외부 시험 바로 응시 ↗</span>` : `<span class="meta-q">문제 ${exam.questionCount}개</span>`}
+                ${exam.externalUrl ? `<span class="meta-q">새 탭에서 시험 보기 ↗</span>` : `<span class="meta-q">문제 ${exam.questionCount}개</span>`}
                 <span class="meta-t">${exam.minutes}분</span>
                 <span class="meta-s">${best == null ? "미응시" : `최고 ${best}%`}</span>
                 <span class="meta-tag">#${exam.tag}</span>
