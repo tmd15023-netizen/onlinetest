@@ -416,7 +416,7 @@ function examListHtml() {
           const grade = examGradeClass(exam.category);
           return `
             ${exam.externalUrl
-              ? `<a class="exam-item" href="${escapeHtml(exam.externalUrl)}" target="_blank" rel="noopener noreferrer">`
+              ? `<div class="external-exam-row"><a class="exam-item" data-external-exam="${escapeHtml(exam.id)}" href="${escapeHtml(exam.externalUrl)}" target="_blank" rel="noopener noreferrer">`
               : `<button class="exam-item" data-exam="${exam.id}">`}
               <div class="exam-title-row">
                 <h3>${escapeHtml(exam.title)}</h3>
@@ -427,10 +427,10 @@ function examListHtml() {
               <div class="exam-meta">
                 ${exam.externalUrl ? `<span class="meta-q">새 탭에서 시험 보기 ↗</span>` : `<span class="meta-q">문제 ${exam.questionCount}개</span>`}
                 <span class="meta-t">${exam.minutes}분</span>
-                <span class="meta-s">${best == null ? "미응시" : `최고 ${best}%`}</span>
+                <span class="meta-s">${exam.externalUrl ? (exam.externalProgress?.completed ? "학습 완료" : exam.externalProgress?.viewedAt ? "열람함" : "열람 전") : best == null ? "미응시" : `최고 ${best}%`}</span>
                 <span class="meta-tag">#${exam.tag}</span>
               </div>
-            ${exam.externalUrl ? "</a>" : "</button>"}
+            ${exam.externalUrl ? `</a><div class="external-progress-actions"><button type="button" class="btn btn-ghost" data-complete-exam="${escapeHtml(exam.id)}" aria-pressed="${Boolean(exam.externalProgress?.completed)}">${exam.externalProgress?.completed ? "✓ 학습 완료 · 취소" : "학습 완료 표시"}</button><span class="external-progress-help">직접 표시하는 학습 상태입니다. 외부 시험 점수는 연동되지 않습니다.</span><span data-progress-feedback="${escapeHtml(exam.id)}" role="status" aria-live="polite"></span></div></div>` : "</button>"}
           `;
         })
         .join("")}
@@ -439,6 +439,37 @@ function examListHtml() {
 }
 
 function bindExamList(rerender) {
+  const saveProgress = async (exam, completed, button) => {
+    if (button) button.disabled = true;
+    try {
+      exam.externalProgress = await Api.saveExternalProgress(exam.id, completed);
+      const pageY = window.scrollY;
+      rerender();
+      window.scrollTo(0, pageY);
+    } catch (err) {
+      const feedback = [...document.querySelectorAll("[data-progress-feedback]")].find(el => el.dataset.progressFeedback === exam.id);
+      if (feedback) {
+        feedback.textContent = "기록 저장 실패: " + err.message;
+        feedback.style.color = "#e25c5c";
+      }
+    } finally {
+      if (button) button.disabled = false;
+    }
+  };
+  document.querySelectorAll("[data-external-exam]").forEach(link => {
+    const record = () => {
+      const exam = getExamList().find(item => item.id === link.dataset.externalExam);
+      if (exam) saveProgress(exam);
+    };
+    link.addEventListener("click", record);
+    link.addEventListener("auxclick", event => { if (event.button === 1) record(); });
+  });
+  document.querySelectorAll("[data-complete-exam]").forEach(button => {
+    button.addEventListener("click", () => {
+      const exam = getExamList().find(item => item.id === button.dataset.completeExam);
+      if (exam) saveProgress(exam, !exam.externalProgress?.completed, button);
+    });
+  });
   document.querySelectorAll("[data-cat]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.category = btn.dataset.cat;

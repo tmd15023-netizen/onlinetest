@@ -65,6 +65,35 @@ const examSchema = new mongoose.Schema(
   { collection: "exams", id: false }
 );
 
+const externalProgressSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  examId: { type: String, required: true },
+  viewedAt: { type: String, default: "" },
+  completed: { type: Boolean, default: false },
+  completedAt: { type: String, default: "" },
+}, { collection: "external_exam_progress" });
+externalProgressSchema.index({ userId: 1, examId: 1 }, { unique: true });
+const ExternalProgress = mongoose.model("ExternalProgress", externalProgressSchema);
+
+async function listExternalProgress(userId) {
+  await ensureMongo();
+  if (!mongoReady()) throw new Error("학습 기록 DB에 연결하지 못했습니다.");
+  return ExternalProgress.find({ userId }).lean();
+}
+
+async function saveExternalProgress(userId, examId, completed) {
+  await ensureMongo();
+  if (!mongoReady()) throw new Error("학습 기록 DB에 연결하지 못했습니다.");
+  const now = new Date().toISOString();
+  const changes = { viewedAt: now };
+  if (typeof completed === "boolean") {
+    changes.completed = completed;
+    changes.completedAt = completed ? now : "";
+  }
+  return ExternalProgress.findOneAndUpdate({ userId, examId }, { $set: changes },
+    { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
+}
+
 const noticeSchema = new mongoose.Schema(
   {
     id: { type: String, required: true, unique: true },
@@ -567,6 +596,8 @@ async function ensureNotices(_defaults) {
 }
 
 module.exports = {
+  listExternalProgress,
+  saveExternalProgress,
   connectMongo,
   ensureMongo,
   mongoReady,

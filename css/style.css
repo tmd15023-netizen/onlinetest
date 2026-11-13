@@ -2486,3 +2486,10 @@ button {
     margin: 12px 0 10px;
   }
 }
+
+.external-exam-row { border-bottom: 1px solid var(--line); }
+.external-exam-row:last-child { border-bottom: 0; }
+.subject-exam-list .external-exam-row .exam-item { border-bottom: 0; }
+.external-progress-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 0 16px 16px; }
+.external-progress-help { color: var(--text-sub); font-size: 12px; }
+.external-progress-actions [aria-pressed="true"] { color: #17877f; background: var(--teal-soft); }

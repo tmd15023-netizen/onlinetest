@@ -994,7 +994,29 @@ app.post("/api/admin/login", async (req, res) => {
 
 app.get("/api/exams", auth, async (req, res) => {
   const exams = await listAllExams();
-  res.json(exams.map(publicExam));
+  try {
+    const progress = await dbx.listExternalProgress(req.session.userId);
+    const byExam = new Map(progress.map(item => [item.examId, item]));
+    res.json(exams.map(exam => ({ ...publicExam(exam),
+      externalProgress: exam.externalUrl ? byExam.get(exam.id) || null : null,
+    })));
+  } catch (err) {
+    res.status(503).json({ error: err.message || "학습 상태를 불러오지 못했습니다." });
+  }
+});
+
+app.post("/api/exams/:id/progress", auth, async (req, res) => {
+  try {
+    const exam = await findExam(req.params.id);
+    if (!exam || !exam.externalUrl) return res.status(404).json({ error: "외부 시험을 찾을 수 없습니다." });
+    if (req.body.completed !== undefined && typeof req.body.completed !== "boolean") {
+      return res.status(400).json({ error: "올바르지 않은 학습 상태입니다." });
+    }
+    const item = await dbx.saveExternalProgress(req.session.userId, exam.id, req.body.completed);
+    res.json({ viewedAt: item.viewedAt, completed: item.completed, completedAt: item.completedAt });
+  } catch (err) {
+    res.status(503).json({ error: err.message || "학습 상태를 저장하지 못했습니다." });
+  }
 });
 
 app.get("/api/notices", auth, async (req, res) => {

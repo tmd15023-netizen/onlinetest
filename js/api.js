@@ -48,6 +48,11 @@ window.Api = {
   notices() {
     return this.request("/api/notices");
   },
+  saveExternalProgress(id, completed) {
+    return this.request(`/api/exams/${encodeURIComponent(id)}/progress`, {
+      method: "POST", body: JSON.stringify(typeof completed === "boolean" ? { completed } : {}),
+    });
+  },
   startExam(id, password) {
     return this.request(`/api/exams/${encodeURIComponent(id)}/start`, {
       method: "POST",
