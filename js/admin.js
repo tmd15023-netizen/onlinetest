@@ -742,6 +742,7 @@ async function renderAdminExams() {
         <form id="create-exam" class="admin-form">
           <div class="field"><label>시험 제목</label><input name="title" required placeholder="예: 3회차 모의고사" /></div>
           <div class="field"><label>설명</label><input name="desc" placeholder="응시자에게 보이는 안내" /></div>
+          <div class="field"><label for="create-exam-url">외부 시험 링크 (선택)</label><input id="create-exam-url" name="externalUrl" type="url" placeholder="https://example.com/exam" /><p class="exam-desc">입력하면 시험을 누를 때 해당 사이트로 이동합니다. 비워 두면 기존 방식으로 응시합니다. 외부 시험 결과는 자동 연동되지 않습니다.</p></div>
           <div class="field">
             <label>급수</label>
             ${examGradeSelectHtml("category", EXAM_GRADES[0])}
@@ -768,6 +769,7 @@ async function renderAdminExams() {
                 <h3>${escapeHtml(exam.title)}</h3>
                 <span class="badge ${examGradeClass(exam.category)}">${escapeHtml(examGradeShort(exam.category))}</span>
                 ${exam.hasPassword ? `<span class="badge lock">비밀번호</span>` : ""}
+                ${exam.externalUrl ? `<span class="badge">외부 시험</span>` : ""}
               </div>
               <div class="exam-grade ${examGradeClass(exam.category)}">
                 <span class="exam-grade-label">급수</span>
@@ -800,6 +802,7 @@ async function renderAdminExams() {
       await Api.createExam({
         title: formField(form, "title"),
         desc: formField(form, "desc"),
+        externalUrl: formField(form, "externalUrl"),
         minutes: formField(form, "minutes"),
         password: formField(form, "password"),
         tag: "시험",
@@ -870,6 +873,7 @@ async function renderAdminExam(id, options = {}) {
         <form id="exam-meta" class="admin-form">
           <div class="field"><label>제목</label><input name="title" value="${escapeHtml(exam.title)}" required /></div>
           <div class="field"><label>설명</label><input name="desc" value="${escapeHtml(exam.desc || "")}" /></div>
+          <div class="field"><label for="edit-exam-url">외부 시험 링크 (선택)</label><input id="edit-exam-url" name="externalUrl" type="url" value="${escapeHtml(exam.externalUrl || "")}" placeholder="https://example.com/exam" /><p class="exam-desc">입력하면 연결된 사이트에서 응시합니다. 링크를 지우면 기존 문항으로 응시합니다. 외부 시험 결과는 자동 연동되지 않습니다.</p></div>
           <div class="field">
             <label>급수</label>
             ${examGradeSelectHtml("category", exam.category)}
@@ -998,6 +1002,7 @@ async function renderAdminExam(id, options = {}) {
     const body = {
       title: formField(form, "title"),
       desc: formField(form, "desc"),
+      externalUrl: formField(form, "externalUrl"),
       minutes: formField(form, "minutes"),
       category: formField(form, "category"),
       tag: formField(form, "tag"),

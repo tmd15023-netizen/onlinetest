@@ -724,12 +724,21 @@ async function parseDocxUpload(input, filename, options = {}) {
   ]);
 }
 
+function normalizeExamUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const url = new URL(text);
+  if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid exam URL");
+  return url.href;
+}
+
 function publicExam(exam) {
   const customCount = Array.isArray(exam.questions) ? exam.questions.length : 0;
   return {
     id: exam.id,
     title: exam.title,
     desc: exam.desc,
+    externalUrl: exam.externalUrl || "",
     category: examGradeLabel(exam.category),
     minutes: exam.minutes,
     tag: exam.tag || "시험",
@@ -1061,6 +1070,7 @@ app.post("/api/exams/:id/start", auth, async (req, res) => {
   if (exam.password && hash(password) !== exam.password) {
     return res.status(403).json({ error: "시험 비밀번호가 올바르지 않습니다." });
   }
+  if (exam.externalUrl) return res.json({ externalUrl: normalizeExamUrl(exam.externalUrl) });
   const source = await persistParsedQuestions(
     exam.id,
     exam.questions && exam.questions.length
@@ -1236,7 +1246,11 @@ app.put("/api/admin/exams/reorder", auth, adminOnly, async (req, res) => {
 app.post("/api/admin/exams", auth, adminOnly, async (req, res) => {
   const title = String(req.body.title || "").trim();
   if (!title) return res.status(400).json({ error: "시험 제목을 입력해 주세요." });
+  let externalUrl;
+  try { externalUrl = normalizeExamUrl(req.body.externalUrl); }
+  catch { return res.status(400).json({ error: "http:// 또는 https://로 시작하는 올바른 시험 링크를 입력해 주세요." }); }
   const exam = {
+    externalUrl,
     id: uid("exam"),
     title,
     desc: String(req.body.desc || "").trim(),
@@ -1260,6 +1274,10 @@ app.post("/api/admin/exams", auth, adminOnly, async (req, res) => {
 app.put("/api/admin/exams/:id", auth, adminOnly, async (req, res) => {
   const exam = await findExam(req.params.id);
   if (!exam) return res.status(404).json({ error: "시험을 찾을 수 없습니다." });
+  if (req.body.externalUrl != null) {
+    try { exam.externalUrl = normalizeExamUrl(req.body.externalUrl); }
+    catch { return res.status(400).json({ error: "http:// 또는 https://로 시작하는 올바른 시험 링크를 입력해 주세요." }); }
+  }
   if (req.body.title) exam.title = String(req.body.title).trim();
   if (req.body.desc != null) exam.desc = String(req.body.desc).trim();
   if (req.body.category) exam.category = examGradeLabel(req.body.category);

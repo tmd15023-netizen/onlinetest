@@ -417,7 +417,7 @@ function examListHtml() {
               </div>
               <p class="exam-desc">${escapeHtml(exam.desc)}</p>
               <div class="exam-meta">
-                <span class="meta-q">문제 ${exam.questionCount}개</span>
+                ${exam.externalUrl ? `<span class="meta-q">외부 시험 바로 응시 ↗</span>` : `<span class="meta-q">문제 ${exam.questionCount}개</span>`}
                 <span class="meta-t">${exam.minutes}분</span>
                 <span class="meta-s">${best == null ? "미응시" : `최고 ${best}%`}</span>
                 <span class="meta-tag">#${exam.tag}</span>
@@ -438,8 +438,13 @@ function bindExamList(rerender) {
     });
   });
   document.querySelectorAll("[data-exam]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.modalExam = getExamList().find((item) => item.id === btn.dataset.exam);
+    btn.addEventListener("click", async () => {
+      const exam = getExamList().find((item) => item.id === btn.dataset.exam);
+      if (exam?.externalUrl && !exam.hasPassword) {
+        try { await ExamEngine.start(exam, ""); } catch (err) { alert(err.message); }
+        return;
+      }
+      state.modalExam = exam;
       rerender();
     });
   });

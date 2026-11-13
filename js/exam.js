@@ -1,6 +1,12 @@
 const ExamEngine = {
   async start(exam, password) {
     const payload = await Api.startExam(exam.id, password);
+    if (payload.externalUrl) {
+      const url = new URL(payload.externalUrl);
+      if (!["https:", "http:"].includes(url.protocol)) throw new Error("올바르지 않은 시험 링크입니다.");
+      window.location.assign(url.href);
+      return;
+    }
     const session = {
       examId: payload.examId,
       title: payload.title,

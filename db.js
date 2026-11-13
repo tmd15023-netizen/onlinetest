@@ -51,6 +51,7 @@ const examSchema = new mongoose.Schema(
     id: { type: String, required: true, unique: true },
     title: String,
     desc: String,
+    externalUrl: { type: String, default: "" },
     category: String,
     minutes: Number,
     tag: String,
